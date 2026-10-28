@@ -1,6 +1,6 @@
 {
   "name": "gladys-econet300",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Gladys Assistant external integration for pellet boilers with a Plum ecoMAX controller, through the local API of their ecoNET300 module: temperatures, operating state, alarms, optional bounded commands. Unofficial, not affiliated with Plum.",
   "type": "module",

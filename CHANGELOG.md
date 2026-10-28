@@ -10,6 +10,8 @@ the notes of the version's GitHub Release.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-28
+
 ### Added
 
 - First version: pellet boilers with a Plum ecoMAX controller through the
@@ -32,3 +34,6 @@ the notes of the version's GitHub Release.
   (review r3).
 - Refused credentials stop the reads (no automatic retry); HTTP 429/5xx
   pause them; "Test the connection" button. English and French.
+
+[Unreleased]: https://github.com/LM1LC3N7/gladys-econet300/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/LM1LC3N7/gladys-econet300/releases/tag/v0.1.1
