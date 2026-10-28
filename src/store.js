@@ -122,7 +122,8 @@ function readStop(raw) {
     resends: count(own(raw, 'resends'), TIMINGS.stopResends),
     // An unreadable count of starts is none (one read never lifts the guard).
     starts: Number.isSafeInteger(own(raw, 'starts')) && own(raw, 'starts') === 1 ? 1 : 0,
-    // The state read at the click (0 to 26), else unknown.
+    // The state read recently before it left, or running since (0 to 26),
+    // else unknown.
     from:
       Number.isSafeInteger(own(raw, 'from')) && own(raw, 'from') >= 0 && own(raw, 'from') <= 26
         ? own(raw, 'from')

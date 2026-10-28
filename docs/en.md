@@ -65,10 +65,10 @@ a voice assistant does not reach the boiler.
 Each command first reads the module again (its identity and its values) and
 decides on that read, never on the values kept in memory; commands arriving
 together (a scene) share that read and the read that confirms them, then
-leave one by one. A command leaves 4 s after the click at the latest, else
+leave one by one. A command leaves 3.5 s after the click at the latest, else
 it is refused with nothing sent ("not sent in time" when the commands before
 it took the time). It is reported successful only when a read made after it,
-before 4.5 s, shows the value asked; otherwise Gladys shows "sent and
+before 4.3 s, shows the value asked; otherwise Gladys shows "sent and
 accepted, not applied yet" (or "sent, without confirmation" when the module
 did not answer), and the follow-up reads, 5 s and 20 s later, publish the
 value as soon as it shows. Beyond 4 commands waiting, they are refused. An
@@ -109,16 +109,25 @@ shows "stop sent, without confirmation". When the module answers something
 other than "OK", Gladys shows it and it is not sent again.
 
 It is reported successful when a read made after it shows the boiler off,
-or burning off while it was running at the click. A pellet boiler takes
-several minutes to go out; the select shows "Off" while it burns off. Once a
-read made after the stop shows it off, or burning off while it was running at
-the click, nothing is sent again.
-If a read made after the stop shows it running while it has been seen
-neither off nor burning off yet, the stop is sent again, 3 times at most.
+or burning off while it was read running just before the stop left (a read
+less than two intervals old) or since: the stop is then taken. A pellet
+boiler takes several minutes to go out; the select shows "Off" while it
+burns off. Once the stop is taken, nothing is sent again. If a read made
+after the stop shows the boiler running while the stop has not been seen
+taken yet, the stop is sent again, 3 times at most.
+
+When the state before is unknown (module unreachable, the integration
+restarted, credentials refused or the last read too old when the stop
+left) and the first read after it already shows burning off, nothing proves
+the stop was taken (it may be a normal extinction): if the boiler is then
+read running, that does not count as started elsewhere, and the stop is sent
+again. A start on the panel during that extinction may therefore be
+contradicted; once burning off follows a running state read, the stop is
+taken and a new start is not contradicted any more.
 
 The stop from Gladys is kept in /data, with no time limit. It is lifted only
-by a click on "On" (with the option), or when, after being seen off or
-burning off, the boiler is read running (firing up, operation,
+by a click on "On" (with the option), or when, once the stop is taken, the
+boiler is read running (firing up, operation,
 supervision..., not an alarm nor a service mode) twice in a row (started
 again on the panel or from the app).
 
@@ -156,9 +165,10 @@ than the interval), the stop sent from Gladys. No secret.
 - Summer/winter mode, mixing circuit setpoints, burner output, pumps: not in
   this version.
 - Slow module, measured on a local server: a scene "On" + two setpoints is
-  sent and confirmed up to 700 ms per request; at 900 ms the three leave but
-  the confirmation comes from the follow-up reads ("not applied yet" on
-  screen). A setpoint alone is confirmed up to 900 ms.
+  sent and confirmed up to 700 ms per request; at 900 ms the first two leave
+  and are confirmed by the follow-up reads ("not applied yet" on screen),
+  the third is refused with nothing sent ("not sent in time"). A setpoint
+  alone is confirmed up to 900 ms.
 
 ## Credits
 

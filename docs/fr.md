@@ -68,9 +68,9 @@ Chaque commande relit d'abord le module (son identité et ses valeurs) et
 décide sur cette lecture, jamais sur les valeurs gardées en mémoire ; les
 commandes arrivées ensemble (une scène) partagent cette relecture et la
 lecture qui les confirme, puis partent une à une. Une commande part au plus
-tard 4 s après le clic, sinon elle est refusée sans rien envoyer (« pas
+tard 3,5 s après le clic, sinon elle est refusée sans rien envoyer (« pas
 partie à temps » quand les commandes avant elle ont pris le temps). Elle
-n'est annoncée réussie que si une lecture faite après elle, avant 4,5 s,
+n'est annoncée réussie que si une lecture faite après elle, avant 4,3 s,
 montre la valeur demandée ; sinon Gladys affiche « envoyée et acceptée, pas
 encore appliquée » (ou « envoyée, sans confirmation » si le module n'a pas
 répondu), et les lectures de suivi, 5 s et 20 s plus tard, publient la
@@ -115,17 +115,26 @@ identifiants remettent le compte à zéro. Quand il part sans réponse, Gladys a
 « OK », Gladys l'affiche et il n'est pas renvoyé.
 
 Il est annoncé réussi quand une lecture faite après lui montre la chaudière
-à l'arrêt, ou en extinction alors qu'elle fonctionnait au moment du clic. Une
-chaudière à granulés s'éteint en plusieurs minutes ; le sélecteur montre
-« Arrêt » pendant l'extinction. Dès qu'une lecture faite après l'arrêt la
-montre à l'arrêt, ou en extinction alors qu'elle fonctionnait au clic, plus
-rien n'est renvoyé. Si une lecture
-faite après l'arrêt la montre en marche alors qu'elle n'a encore été vue ni
-à l'arrêt ni en extinction, l'arrêt est renvoyé, 3 fois au plus.
+à l'arrêt, ou en extinction alors qu'elle a été lue en marche juste avant
+son départ (une lecture de moins de deux intervalles) ou depuis : l'arrêt est
+alors pris. Une chaudière à granulés s'éteint en plusieurs minutes ; le
+sélecteur montre « Arrêt » pendant l'extinction. Une fois l'arrêt pris, plus
+rien n'est renvoyé. Si une lecture faite après l'arrêt la montre en marche
+alors qu'il n'a pas encore été vu pris, l'arrêt est renvoyé, 3 fois au plus.
+
+Quand l'état d'avant est inconnu (module injoignable, redémarrage de
+l'intégration, identifiants refusés ou dernière lecture trop ancienne au
+départ de l'arrêt) et que la première lecture après lui montre déjà
+l'extinction, rien ne prouve qu'il ait pris (ce peut être une extinction
+normale) : si la chaudière est ensuite lue en marche, ce n'est pas compté
+comme une remise en marche ailleurs, et l'arrêt est renvoyé. Une remise en
+marche sur le panneau pendant cette extinction-là peut donc être contredite ;
+dès qu'une extinction suit une marche lue, l'arrêt est pris et une nouvelle
+remise en marche ne l'est plus.
 
 L'arrêt depuis Gladys est gardé dans /data, sans limite de durée. Il est levé
-seulement par un clic sur « Marche » (avec l'option), ou quand, après avoir
-été vue à l'arrêt ou en extinction, la chaudière est lue en marche (allumage,
+seulement par un clic sur « Marche » (avec l'option), ou quand, une fois
+l'arrêt pris, la chaudière est lue en marche (allumage,
 fonctionnement, surveillance..., pas une alarme ni un mode de service) deux
 fois de suite (remise en marche sur le panneau ou par l'application).
 
@@ -168,9 +177,10 @@ secret.
   pompes : pas dans cette version.
 - Module lent, mesuré sur un serveur local : une scène « Marche » + deux
   consignes est envoyée et confirmée jusqu'à 700 ms par requête ; à 900 ms,
-  les trois partent mais la confirmation vient des lectures de suivi
-  (« pas encore appliquée » à l'écran). Une consigne seule est confirmée
-  jusqu'à 900 ms.
+  les deux premières partent et sont confirmées par les lectures de suivi
+  (« pas encore appliquée » à l'écran), la troisième est refusée sans rien
+  envoyer (« pas partie à temps »). Une consigne seule est confirmée jusqu'à
+  900 ms.
 
 ## Crédits
 

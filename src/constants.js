@@ -172,13 +172,14 @@ export const TIMINGS = {
   /** getConfig() failed: tried again after 5, 10, 30 s, then every minute, without end. */
   configRetry: [5 * SECOND, 10 * SECOND, 30 * SECOND, MINUTE],
   /**
-   * Commands (Gladys waits 5 s for the ack): the request must leave by 4 s
-   * after the click, or the command is refused unsent; its answer and the
-   * read that confirms it are awaited until 4.5 s ("sent, without
-   * confirmation" after that).
+   * Commands (Gladys waits 5 s for the ack, its timer armed when it sends):
+   * the request must leave by 3.5 s after the click, or the command is
+   * refused unsent; its answer and the read that confirms it are awaited
+   * until 4.3 s ("sent, without confirmation" after that), the rest left
+   * for the event loops and the WebSocket.
    */
-  commandSendBy: 4_000,
-  commandAnswerBy: 4_500,
+  commandSendBy: 3_500,
+  commandAnswerBy: 4_300,
   /** At least 0.3 s left to send after the fresh read. */
   commandMinSend: 300,
   /** Commands arriving within this window share one batch (one fresh read). */

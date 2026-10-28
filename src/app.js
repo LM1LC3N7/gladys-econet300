@@ -44,15 +44,19 @@
 //     showing the boiler running sends it again, 3 times at most; once
 //     taken, never again;
 //   - success only when a read after it shows the boiler off (mode 0), or
-//     burning off (mode 7) when the read before showed it running.
+//     burning off (mode 7) when the boiler was read running recently before
+//     it left, or after it left. Its state before unknown (an outage, a
+//     restart, refused credentials, a stale read) and never read running
+//     since: burning off proves nothing, a running state read later is no
+//     start elsewhere and gets the stop again.
 //
 // The other commands: those arriving together (50 ms) form a batch that
 // shares one fresh read (identity, values; the bounds of the controller
 // from the last periodic read when recent, else read too), never the
 // values in memory; then each leaves in order and one read confirms them;
 // 4 waiting at most; the option and the epoch checked on arrival, after the
-// read and right before the request leaves; sent by 4 s after the click or
-// refused unsent; success only when a read before 4.5 s shows the value
+// read and right before the request leaves; sent by 3.5 s after the click or
+// refused unsent; success only when a read before 4.3 s shows the value
 // asked (equal to the value before = not applied yet); refused while /data
 // cannot be read; a 401/403 refuses that command only. "On" lifts the guard
 // of the stop only once that is saved in /data.
@@ -1415,10 +1419,8 @@ export class EconetApp {
     if (known && known !== key) {
       throw this.refusal(ERRORS.foreign);
     }
-    // The state read just before (if recent): burning off after it counts as
-    // the stop taken only when the boiler was running then.
-    const from = this.freshData()?.values?.mode ?? null;
-    this.memory.stop = { key, phase: 'unsent', tries: 0, resends: 0, starts: 0, from };
+    // `from`, the state before the stop, is set when it leaves (departed()).
+    this.memory.stop = { key, phase: 'unsent', tries: 0, resends: 0, starts: 0, from: null };
     // Never waited for: the stop does not depend on /data.
     void this.saveMemory();
     this.logger.info('ecoNET300: boiler off (stop from Gladys)');
@@ -1429,9 +1431,12 @@ export class EconetApp {
     // The status and the states say it (never waited for: the ack first).
     void this.publishAll();
     if (outcome.ok) {
-      const before = session.data?.values?.mode;
       const after = await this.readAfter(session, received + TIMINGS.commandAnswerBy);
       const stop = this.memory.stop;
+      const ours = stop?.key === key ? stop : undefined;
+      // The state of the boiler recently before the stop left (never an older
+      // read): burning off is the stop taken only after a running state.
+      const before = ours?.from ?? undefined;
       const off = after?.mode === MODE_OFF;
       const burningOff =
         after?.mode === MODE_BURNING_OFF && before !== undefined && isRunning(before);
@@ -1439,6 +1444,8 @@ export class EconetApp {
         // A read that left after the stop shows it taken: no resend from now on.
         stop.phase = off ? 'confirmed' : 'stopping';
         void this.saveMemory();
+      } else if (ours) {
+        this.ranAfter(ours, after?.mode);
       }
       if (!off && !burningOff) {
         throw this.refusal(ERRORS.stopNotYet);
@@ -1500,9 +1507,7 @@ export class EconetApp {
     const current = this.memory.stop === stop ? stop : undefined;
     this.followUp(session);
     if (!err) {
-      if (current && current.phase === 'unsent') {
-        current.phase = 'sent';
-      }
+      this.departed(current);
       await this.saveMemory();
       return { ok: true };
     }
@@ -1538,11 +1543,32 @@ export class EconetApp {
     if (isBusy(err)) {
       this.block(err);
     }
-    if (current && current.phase === 'unsent') {
-      current.phase = 'sent';
-    }
+    this.departed(current);
     await this.saveMemory();
     return { error: ERRORS.stopUnconfirmed(reason) };
+  }
+
+  /**
+   * A stop kept unsent has just left. Its state before: the last read, only
+   * when recent (after an outage, a restart, refused credentials or a stale
+   * read: unknown, and burning off then proves nothing).
+   */
+  departed(stop) {
+    if (stop && stop.phase === 'unsent') {
+      stop.phase = 'sent';
+      stop.from = this.freshData()?.values?.mode ?? null;
+    }
+  }
+
+  /**
+   * The boiler read running after the stop left (its state before unknown,
+   * or not running): burning off read from now on is the stop taken.
+   */
+  ranAfter(stop, mode) {
+    if (stop.phase === 'sent' && isRunning(mode) && !isRunning(stop.from)) {
+      stop.from = mode;
+      void this.saveMemory();
+    }
   }
 
   /** Whether a stop kept in /data that never left is to be sent again now. */
@@ -1576,11 +1602,12 @@ export class EconetApp {
 
   /**
    * A read through the guards. The stop of Gladys (reads begun after it
-   * left only): mode 0 = applied, mode 7 = taken (burning off): no resend
-   * after either; once taken, a running state read twice in a row = started
-   * elsewhere, the guard lifted; not taken yet and running = sent again,
-   * 3 times at most. The setpoint guards: lifted when the value asked shows
-   * after a move, or after 90 s.
+   * left only): mode 0 = applied, mode 7 = taken (burning off) when the
+   * boiler was read running before it left or since: no resend after either;
+   * once taken, a running state read twice in a row = started elsewhere, the
+   * guard lifted; not taken yet and running = sent again, 3 times at most.
+   * The setpoint guards: lifted when the value asked shows after a move, or
+   * after 90 s.
    */
   observe(session, startedAt) {
     const { system, values } = session.data;
@@ -1593,6 +1620,7 @@ export class EconetApp {
     ) {
       const mode = values.mode;
       const taken = stop.phase === 'confirmed' || stop.phase === 'stopping';
+      this.ranAfter(stop, mode);
       if (mode === MODE_OFF) {
         if (stop.phase !== 'confirmed' || stop.starts !== 0) {
           stop.phase = 'confirmed';
@@ -1600,9 +1628,11 @@ export class EconetApp {
           void this.saveMemory();
         }
       } else if (mode === MODE_BURNING_OFF) {
-        // Burning off after running at the click: the stop taken (no resend
-        // from now on). Without a running state at the click, it proves
-        // nothing (a normal extinction): no change, and no resend either.
+        // Burning off after a running state (read recently before the stop
+        // left, or since): the stop taken (no resend from now on). Its state
+        // before unknown and never read running since, it proves nothing (a
+        // normal extinction): no change, and no resend either; a running
+        // state read later is no start elsewhere: the stop is sent again.
         const proof = stop.phase === 'sent' && stop.from !== null && isRunning(stop.from);
         if (proof || (stop.phase !== 'sent' && stop.starts !== 0)) {
           stop.phase = proof ? 'stopping' : stop.phase;

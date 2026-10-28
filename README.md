@@ -26,14 +26,14 @@ User guides: [English](docs/en.md), [français](docs/fr.md).
   (a water heater in whole degrees, bounds of the controller, 20 °C to a
   ceiling of 65 °C by default, 65 °C at most). Decided on a fresh read
   (identity, values; bounds of the last read), checked again right before
-  the request leaves, refused after 4 s, successful only when a read shows
+  the request leaves, refused unsent after 3.5 s, successful only when a read shows
   the value; commands arriving together share the reads.
 - **"Off" is the protective command**: no option; it cuts a read under way
   and leaves first, cancels the commands not sent yet, goes through a pause
   or a refused password (one try); kept in `/data` and sent again by the
   reads until it leaves (no limit when it could not connect; 3 times at most
-  when refused 401/403 while the reads go through, or when the boiler still runs before it was seen off
-  or burning off). Its guard is lifted only by "On" or by a running state
+  when refused 401/403 while the reads go through, or when the boiler still runs before the stop was
+  seen taken: off, or burning off after a running state read). Its guard is lifted only by "On" or by a running state
   read twice after the stop was seen taken. Its two
   refusal cases are listed in the guides.
 - **No switch, no writable binary**: a "turn everything off" never reaches the

@@ -190,6 +190,33 @@ test('a stop the module refuses (HTTP 403) is sent again twice at most, the read
   assert.match(statusText(t), /refusé 3 fois par l’ecoNET300 \(HTTP 401\/403\) : plus renvoyé/);
 });
 
+test('a stop refused 3 times to an account that reads but may not write: other credentials send it again', async () => {
+  const store = memoryStore();
+  const t = await setup({ store });
+  await t.connect();
+  await t.create();
+  // This account reads; BOILER_CONTROL is refused to it.
+  t.dev.route = (path) => (path === '/econet/newParam' ? { status: 403, body: 'no' } : undefined);
+  await t.command('boiler-control', 'off');
+  for (let i = 0; i < 3; i += 1) {
+    await t.wait(61 * SECOND);
+  }
+  assert.equal(stops(t), 3);
+  assert.equal(store.data.stop.tries, 3);
+  assert.equal(store.data.refused, false, 'no refusal of the reads to lift: no block() here');
+  assert.equal(store.data.stop.from, null, 'set only when it leaves');
+  assert.match(statusText(t), /plus renvoyé/);
+  // Another account, allowed to write, saved: the count starts again, the stop leaves.
+  t.dev.route = undefined;
+  t.dev.password = 'writer-Pa55';
+  await t.during(t.gladys.fake.configUpdated({ ...CONFIG, password: 'writer-Pa55' }));
+  await t.wait(6 * SECOND);
+  assert.equal(stops(t), 4, 'sent with the other credentials');
+  assert.equal(t.dev.curr.mode, 0);
+  assert.equal(store.data.stop.phase, 'confirmed');
+  assert.doesNotMatch(statusText(t), /plus renvoyé/);
+});
+
 test('a stop kept unsent is never sent again to another module at the address', async () => {
   const store = memoryStore();
   const t = await setup({ store });
@@ -228,11 +255,13 @@ test('Off contradicted by the reads: sent again 3 times at most, then said', asy
   const ack = await t.command('boiler-control', 'off');
   assert.equal(ack.success, false);
   assert.match(ack.error, /Arrêt envoyé et accepté ; la chaudière ne l’indique pas encore/);
+  t.dev.curr.mode = 2;
   await t.wait(25 * SECOND);
   for (let i = 0; i < 5; i += 1) {
     await t.wait(61 * SECOND);
   }
   assert.equal(stops(t), 4, 'the click and 3 resends');
+  assert.equal(t.app.memory.stop.from, 3, 'the state before the stop is kept');
   assert.equal(
     last(t.gladys, 'status'),
     'Arrêt depuis Gladys envoyé mais la chaudière fonctionne encore',
@@ -377,6 +406,7 @@ test('Off acks within the budget even when the module stays silent', async () =>
   assert.ok(t.clock.monotonic() - at < 4_700, `${t.clock.monotonic() - at} ms`);
   assert.match(ack.error, /Arrêt envoyé, sans confirmation \(timeout\)/);
   assert.equal(t.app.memory.stop.phase, 'sent');
+  assert.equal(t.app.memory.stop.from, 3, 'left unanswered: the state before it is kept');
 });
 
 test('Off with getConfig() failing after a reconnection: the session in place sends it', async () => {
@@ -615,4 +645,115 @@ test('a stop being sent is never doubled by a read', async () => {
   t.app.stopping = 0;
   t.app.memory.stop.tries = 3;
   assert.equal(t.app.stopToResend(t.app.session), false);
+});
+
+/** A restart that reads nothing yet (the interval holds): the state of the boiler is unknown. */
+async function restarted(store) {
+  const before = await setup({ store });
+  await before.connect();
+  await before.app.stop();
+  const t = await setup({ store, clock: before.clock });
+  await t.connect();
+  assert.equal(t.dev.count('/econet/sysParams'), 0, 'no read yet');
+  return t;
+}
+
+/** BOILER_CONTROL=0 answered OK, burning off `delay` ms later (at once: 0), never off. */
+function burnsOffAfter(t, delay) {
+  t.dev.ignoreControl = true;
+  t.dev.route = (path) => {
+    if (path === '/econet/newParam') {
+      if (delay === 0) {
+        t.dev.curr.mode = 7;
+      } else {
+        t.clock.timers.setTimeout(() => {
+          t.dev.curr.mode = 7;
+        }, delay);
+      }
+    }
+    return undefined;
+  };
+}
+
+test('state unknown at the click (a restart): read running after the stop, then burning off = taken; a panel start not contradicted', async () => {
+  const store = memoryStore();
+  const t = await restarted(store);
+  burnsOffAfter(t, 2 * SECOND);
+  const ack = await t.command('boiler-control', 'off');
+  assert.match(ack.error, /ne l’indique pas encore/);
+  assert.equal(store.data.stop.from, 3, 'the read of the ack shows it running after it left');
+  await t.wait(6 * SECOND);
+  assert.equal(store.data.stop.phase, 'stopping');
+  // Never read off; started again on the panel.
+  t.dev.route = undefined;
+  t.dev.curr.mode = 2;
+  await t.wait(3 * MINUTE);
+  assert.equal(stops(t), 1, 'the panel start is never contradicted');
+  assert.equal(store.data.stop, null, 'two running reads lift the guard');
+});
+
+test('a stop that leaves after an outage: read running after it, then burning off = taken; a panel start not contradicted', async () => {
+  const store = memoryStore();
+  const t = await setup({ store });
+  await t.connect();
+  t.dev.route = () => 'refuse';
+  await t.wait(61 * SECOND);
+  assert.equal(t.app.session.online, false);
+  const ack = await t.command('boiler-control', 'off');
+  assert.match(ack.error, /Arrêt non envoyé \(unreachable\)/);
+  // The module back: the stop leaves first; the read after it shows it running.
+  burnsOffAfter(t, 2 * SECOND);
+  await t.wait(61 * SECOND);
+  assert.ok(stops(t) >= 1);
+  assert.equal(store.data.stop.from, 3, 'running after it left (nothing recent before)');
+  await t.wait(10 * SECOND);
+  assert.equal(store.data.stop.phase, 'stopping');
+  t.dev.route = undefined;
+  t.dev.curr.mode = 2;
+  const sent = stops(t);
+  await t.wait(3 * MINUTE);
+  assert.equal(stops(t), sent, 'the panel start is never contradicted');
+  assert.equal(store.data.stop, null);
+});
+
+test('the state before a stop is a recent read only: burning off after a stale or failed read proves nothing', async () => {
+  // The last read is older than two intervals.
+  const store = memoryStore();
+  const t = await setup({ store });
+  await t.connect();
+  burnsOffAfter(t, 0);
+  t.app.session.data.at -= 10 * MINUTE;
+  const ack = await t.command('boiler-control', 'off');
+  assert.match(ack.error, /ne l’indique pas encore/, 'burning off right after: no proof');
+  assert.equal(store.data.stop.phase, 'sent');
+  assert.equal(store.data.stop.from, null);
+  // Read running later: no start elsewhere (its state before is unknown), so
+  // the stop, never seen taken, is sent again.
+  t.dev.route = undefined;
+  t.dev.curr.mode = 2;
+  await t.wait(6 * SECOND);
+  assert.equal(stops(t), 2);
+  assert.equal(store.data.stop.from, 2);
+  // The last read failed (the module back right at the click).
+  const u = await setup();
+  await u.connect();
+  u.dev.route = () => 'refuse';
+  await u.wait(61 * SECOND);
+  assert.equal(u.app.session.online, false);
+  burnsOffAfter(u, 0);
+  const second = await u.command('boiler-control', 'off');
+  assert.match(second.error, /ne l’indique pas encore/);
+  assert.equal(u.app.memory.stop.phase, 'sent');
+  assert.equal(u.app.memory.stop.from, null);
+});
+
+test('a stop answered 401 before any read of the session got through: the credentials suspected, not counted', async () => {
+  const store = memoryStore();
+  const t = await restarted(store);
+  assert.equal(t.app.session.online, undefined);
+  t.dev.password = 'changed-on-the-module';
+  const ack = await t.command('boiler-control', 'off');
+  assert.match(ack.error, /HTTP 401, identifiants refusés\) : envoyé dès que/);
+  assert.equal(store.data.stop.tries, 0);
+  assert.equal(store.data.stop.phase, 'unsent');
 });

@@ -317,8 +317,8 @@ test('the option turned off while the write connects: checked right before it le
   assert.equal(setpoints(t).length, 0);
 });
 
-for (const latency of [500, 700, 900]) {
-  test(`a scene of 3 commands on a module answering in ${latency} ms: all sent`, async () => {
+for (const latency of [500, 700]) {
+  test(`a scene of 3 commands on a module answering in ${latency} ms: all set`, async () => {
     const t = await setup({ config: ALLOW });
     await t.connect();
     t.dev.curr.mode = 0;
@@ -333,12 +333,42 @@ for (const latency of [500, 700, 900]) {
     const outcome = await t.during(Promise.all(acks), 6 * SECOND, 10);
     assert.equal(t.dev.requests.filter((r) => r.path === '/econet/newParam').length, 1);
     assert.equal(setpoints(t).length, 2);
-    if (latency <= 700) {
-      assert.deepEqual(outcome.value, [{ success: true }, { success: true }, { success: true }]);
-    }
+    assert.deepEqual(outcome.value, [{ success: true }, { success: true }, { success: true }]);
     assert.equal(t.dev.peak, 1);
   });
 }
+
+test('a scene of 3 commands at 900 ms per request: the third is not sent in time, said so', async () => {
+  const t = await setup({ config: ALLOW });
+  await t.connect();
+  await t.create();
+  t.dev.curr.mode = 0;
+  t.dev.latency = 900;
+  const device = { external_id: DEVICE };
+  const send = (role, value) => t.gladys.fake.setValue(device, { external_id: F(role) }, value);
+  const acks = [send('boiler-control', 'on')];
+  await new Promise((resolve) => setImmediate(resolve));
+  acks.push(send('boiler-setpoint', 70));
+  await new Promise((resolve) => setImmediate(resolve));
+  acks.push(send('dhw-setpoint', 55));
+  const at = t.clock.monotonic();
+  const outcome = await t.during(Promise.all(acks), 6 * SECOND, 10);
+  assert.ok(t.clock.monotonic() - at < 4_400, 'acked within 4.3 s');
+  // Two leave within 3.5 s; their confirming read would end after 4.3 s.
+  assert.equal(t.dev.requests.filter((r) => r.path === '/econet/newParam').length, 1);
+  assert.deepEqual(
+    setpoints(t).map((r) => r.query.newParamKey),
+    ['1280'],
+  );
+  const [on, boiler, dhw] = outcome.value;
+  assert.match(on.error, /pas encore appliquée|sans confirmation/);
+  assert.match(boiler.error, /pas encore appliquée|sans confirmation/);
+  assert.match(dhw.error, /Pas partie à temps.*rien envoyé/);
+  // The follow-up reads publish what was set.
+  await t.wait(25 * SECOND);
+  assert.equal(last(t.gladys, 'boiler-setpoint'), 70);
+  assert.equal(t.dev.peak, 1);
+});
 
 test('a setpoint alone on a module answering in 900 ms: set and confirmed', async () => {
   const t = await setup({ config: ALLOW });

@@ -35,7 +35,14 @@ to date at the end of every milestone.
       budget); m7 status punctuation; m8 this file; m9 tests of the minor
       guards; m10 burning off is the stop taken only when the boiler was
       running at the click (`from` kept with the stop).
-- [ ] **Review r3**.
+- [x] **Review 3 fixes** (2026-10-28, review r3 of a824705): I7 test of
+      other credentials resetting the count of a stop refused to an account
+      that reads (403 on BOILER_CONTROL); m6 back to 3.5 s / 4.3 s; m11 the
+      state before a stop is the last read when it leaves (recent only), or
+      a running state read after it; unknown and burning off at once: no
+      proof, a running state later gets the stop again; m12 tests of the
+      freshness of that state and of the 401 of a stop before any read.
+- [ ] **Review r4**.
 - [ ] **Milestone 2 — real module**: run against a real ecoNET300 (see
       "To check"); turn its answers (anonymized) into fixtures.
 
@@ -89,22 +96,29 @@ to date at the end of every milestone.
   commands not sent yet (epoch checked in beforeSend); tried again 250 ms
   when it cannot connect, then kept `unsent` in /data and sent again first
   by the next reads without limit (only 401/403 refusals count, 3 at most;
-  review B1), at a restart before any read and on a new session. Success
-  when a read after it shows mode 0, or mode 7 after a running state. Its
-  guard (`stop` in /data) is never lifted by time: "On" leaving (saved in
-  /data first, refused when /data cannot be written), or a running state
-  (RUNNING_MODES: not alarm nor service modes) read twice in a row after mode
-  0 or 7 was seen. Not seen off nor burning off yet and read running: sent
-  again, 3 times at most; once seen, never (review I1). A module answering other than "OK"
-  drops it (resending would change nothing).
+  review B1), at a restart before any read and on a new session. Taken
+  (success) when a read after it shows mode 0, or mode 7 after a running
+  state: the last read when the stop leaves (`from`, only when less than two
+  intervals old, so unknown after an outage, a restart or refused
+  credentials), or a running state read after it left. Unknown before and
+  burning off at the first read after it proves nothing: a running state
+  read later is no start elsewhere (an unknown state before never is), and
+  the stop, never seen taken, is sent again; a start on the panel during
+  that extinction may be contradicted, the next burning off is then the
+  stop taken (review r3 m11). Its guard (`stop` in /data) is never lifted
+  by time: "On" leaving (saved in /data first, refused when /data cannot be
+  written), or a running state (RUNNING_MODES: not alarm nor service modes)
+  read twice in a row once the stop was taken. Not taken yet and read
+  running: sent again, 3 times at most; once taken, never (review I1). A
+  module answering other than "OK" drops it (resending would change
+  nothing).
 - **Setpoints while a stop of Gladys holds**: refused (a setpoint could
   restart the boiler); "On" first.
 - **Commands**: one option (`allow_commands`) for "On" and both setpoints,
   as the brief asks. Batches: the commands waiting together share one fresh
   read and one confirming read (a scene setting the three at once fits).
-  Gathered for 50 ms; sent by 4 s after the click, answer and confirmation
-  by 4.5 s (measured: a scene of 3 at 700 ms per request confirmed, at
-  900 ms sent, confirmed by the follow-up reads); success
+  Gathered for 50 ms; sent by 3.5 s after the click, answer and
+  confirmation by 4.3 s (see "Ack budget"); success
   only when a read shows the value (equal to the value before = not applied
   yet); setpoint guards (90 s or until seen) make a new command always leave.
 - **Bounds**: those of `rmCurrentDataParamsEdits` from the last periodic read
@@ -114,11 +128,14 @@ to date at the end of every milestone.
   Boiler 20–90 °C hard; hot water 20 °C to the ceiling `max_dhw` (65 °C by
   default, 40–65, never above 65 °C, Louis's rule of 2026-10-28), high bound
   rounded down; whole degrees; all checked again in `beforeSend`.
-- **Ack budget, a chosen gap from the ~3.5 s of the rules**: sent by 4 s,
-  answer and confirming read by 4.5 s (Gladys cuts at 5 s), so that a scene
-  of three commands on a module at 700 ms per request is sent and confirmed
-  (review r1 I2). To bring back to ~3.5 s if Gladys acks arrive late on a
-  real installation.
+- **Ack budget**: sent by 3.5 s, answer and confirming read by 4.3 s, the
+  stop included. Gladys arms its 5 s timer when it sends the command and
+  drops a later ack: 0.7 s left for both event loops and the WebSocket.
+  Measured on a local HTTP server (review r3, scenario s3): a scene of three
+  commands at 700 ms per request sent and confirmed; at 900 ms the first two
+  leave (confirmed by the follow-up reads), the third is refused unsent
+  ("not sent in time"); a setpoint alone confirmed at 900 ms. The 4 s /
+  4.5 s of review r1 gave nothing more at 700 ms (review r3 m6).
 - **Refused credentials**: 401/403 of a read (never of the secondary
   bounds); stop persisted with 8 bits of a salted scrypt print of address,
   user and password (tells "other credentials" at a restart, cannot test a
@@ -140,14 +157,18 @@ to date at the end of every milestone.
 - **One module, one pause**: the features share the module; a 429/5xx on
   one write pauses the module, so the commands of the same batch after it
   are refused "paused" (not sent).
-- **Mutation checks**: 35 mutants of milestone 1 (all killed), then the 39
-  and 59 mutants of reviews r1 and r2 replayed in a temporary folder of the
-  agent. Equivalent survivors, kept as they are: the /data check of
-  `turnOn` (also in `check()`, called just before), the pair
-  `startedAt > stopSentAt` / `writes !== writes` (each covers the other for
-  the stop), `before !== undefined` in the stop's ack (`isRunning(undefined)`
-  is false). Near equivalent: the resend on a new session in `sendStop` (the
-  first read of the new session sends it too).
+- **Mutation checks**: 35 mutants of milestone 1 (all killed), then the 39,
+  59 and 69 mutants of reviews r1 to r3 replayed in a temporary folder of
+  the agent, and 15 more on the r3 fixes (`departed`, `ranAfter`, the ack's
+  state before, the 401 of a stop before any read, the reset of the count
+  by other credentials, the ack budget): all killed. Equivalent survivors,
+  kept as they are: the /data check of `turnOn` (also in `check()`, called
+  just before), the pair `startedAt > stopSentAt` / `writes !== writes`
+  (each covers the other for the stop), `before !== undefined` in the
+  stop's ack (`isRunning(undefined)` is false), the reset of the count in
+  `liftRefusal` (nothing is counted during a refusal, `block()` reset it).
+  Near equivalent: the resend on a new session in `sendStop` (the first read
+  of the new session sends it too).
 
 ## Next
 
