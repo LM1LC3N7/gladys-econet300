@@ -93,6 +93,13 @@ export const CONTROL = { ON: 'on', OFF: 'off' };
 export const MODE_OFF = 0;
 export const MODE_BURNING_OFF = 7;
 export const MODE_MAX = 26;
+/**
+ * The states of a boiler switched on (standby, firing up, operation,
+ * supervision, pause, cleaning, stabilization, purge, flame checks,
+ * prevention, grate, afterburning, heating): what "started elsewhere" and a
+ * stop contradicted mean. Alarm, manual and service states are none of them.
+ */
+export const RUNNING_MODES = new Set([1, 2, 3, 4, 5, 6, 12, 13, 14, 15, 16, 17, 18, 21, 23]);
 
 export const ACTIONS = {
   TEST_CONNECTION: 'test_connection',
@@ -165,15 +172,17 @@ export const TIMINGS = {
   /** getConfig() failed: tried again after 5, 10, 30 s, then every minute, without end. */
   configRetry: [5 * SECOND, 10 * SECOND, 30 * SECOND, MINUTE],
   /**
-   * Commands (Gladys waits 5 s for the ack): the request must leave by
-   * 3.5 s after the click, or the command is refused unsent; its answer and
-   * the read that confirms it are awaited until 4.3 s.
+   * Commands (Gladys waits 5 s for the ack): the request must leave by 4 s
+   * after the click, or the command is refused unsent; its answer and the
+   * read that confirms it are awaited until 4.5 s ("sent, without
+   * confirmation" after that).
    */
-  commandSendBy: 3_500,
-  commandAnswerBy: 4_300,
-  /** The fresh read of a command: 2 s at most, and 0.3 s left to send after it. */
-  commandReadMax: 2_000,
+  commandSendBy: 4_000,
+  commandAnswerBy: 4_500,
+  /** At least 0.3 s left to send after the fresh read. */
   commandMinSend: 300,
+  /** Commands arriving within this window share one batch (one fresh read). */
+  batchWindow: 50,
   /** A stop that could not connect is tried again within this budget. */
   stopRetryBudget: 250,
   stopRetryStep: 50,

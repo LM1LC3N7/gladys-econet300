@@ -5,6 +5,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { memoryStore } from '../src/store.js';
 import { CONFIG, OTHER_UID } from './fixtures/econet.js';
 import { DEVICE, F, MINUTE, SECOND, last, setup } from './helpers/app.js';
 
@@ -97,9 +98,12 @@ test('hot water: the configured ceiling and a lower maximum of the controller wi
   // A ceiling typed above 65 °C is 65 °C.
   await t.during(t.gladys.fake.configUpdated({ ...ALLOW, max_dhw: 90 }));
   t.dev.edits[1281].max = 60;
+  // The bounds come from the last periodic read (settings, not states).
+  await t.wait(61 * SECOND);
   assert.match((await t.command('dhw-setpoint', 62)).error, /de 20 à 60 °C/);
   assert.equal(setpoints(t).length, 0);
   t.dev.edits[1281].max = 99;
+  await t.wait(61 * SECOND);
   assert.match((await t.command('dhw-setpoint', 66)).error, /de 20 à 65 °C/);
 });
 
@@ -118,10 +122,12 @@ test('no bounds from the controller: refused, nothing sent', async () => {
   await t.connect();
   t.dev.route = (path) =>
     path === '/econet/rmCurrentDataParamsEdits' ? { status: 404, body: 'no' } : undefined;
+  await t.wait(61 * SECOND);
   const ack = await t.command('dhw-setpoint', 50);
   assert.match(ack.error, /ne donne pas les bornes de cette consigne/);
   delete t.dev.edits[1281];
   t.dev.route = undefined;
+  await t.wait(61 * SECOND);
   assert.match((await t.command('dhw-setpoint', 50)).error, /ne donne pas les bornes/);
   assert.equal(setpoints(t).length, 0);
 });
@@ -248,12 +254,14 @@ test('refused credentials: commands refused at once (only "Off" tries)', async (
 test('the ceiling lowered while the connection opens: checked right before the request leaves', async () => {
   const t = await setup({ config: ALLOW });
   await t.connect();
-  t.dev.connectDelay = 200;
-  const pending = t.command('dhw-setpoint', 60);
-  // The fresh read takes 3 x 200 ms; the write connects from 600 ms.
-  await t.wait(700);
-  await t.gladys.fake.configUpdated({ ...ALLOW, max_dhw: 50 });
-  const ack = await pending;
+  t.dev.connectDelay = 300;
+  // The ceiling lowered once the write starts to connect, before it leaves.
+  t.dev.onConnect = (path) => {
+    if (path === '/econet/rmCurrNewParam') {
+      void t.gladys.fake.configUpdated({ ...ALLOW, max_dhw: 50 });
+    }
+  };
+  const ack = await t.command('dhw-setpoint', 60);
   assert.match(ack.error, /de 20 à 50 °C/);
   assert.equal(setpoints(t).length, 0);
 });
@@ -263,4 +271,78 @@ test('bounds of the controller not whole: the high bound rounded down', async ()
   await t.connect();
   assert.deepEqual(t.app.rangeOf('dhw-setpoint', { min: 20.2, max: 60.9 }), { low: 21, high: 60 });
   assert.deepEqual(t.app.rangeOf('dhw-setpoint', { min: 0, max: 99.9 }), { low: 20, high: 65 });
+});
+
+test('a 403 on a write refuses that command only: the reads go on, no print in /data', async () => {
+  const store = memoryStore();
+  const t = await setup({ store, config: ALLOW });
+  await t.connect();
+  t.dev.route = (path) =>
+    path === '/econet/rmCurrNewParam' ? { status: 403, body: 'no' } : undefined;
+  const ack = await t.command('dhw-setpoint', 50);
+  assert.match(ack.error, /a refusé la commande \(HTTP 403\)/);
+  await t.wait(10 * MINUTE);
+  assert.ok(t.dev.count('/econet/sysParams') >= 10);
+  assert.equal(store.data.refused, false);
+  assert.equal(store.data.fp, '');
+  assert.equal(t.gladys.fake.connectionStatus.connected, true);
+});
+
+test('/data unreadable: "On" and the setpoints refused, nothing written', async () => {
+  const t = await setup({ config: ALLOW, store: memoryStore(null, { unreadable: true }) });
+  await t.connect();
+  t.dev.curr.mode = 0;
+  for (const [role, value] of [
+    ['dhw-setpoint', 50],
+    ['boiler-setpoint', 70],
+    ['boiler-control', 'on'],
+  ]) {
+    const ack = await t.command(role, value);
+    assert.match(ack.error, /\/data ne peut être lu ou écrit/, role);
+  }
+  assert.equal(t.dev.writes().length, 0);
+});
+
+test('the option turned off while the write connects: checked right before it leaves', async () => {
+  const t = await setup({ config: ALLOW });
+  await t.connect();
+  t.dev.connectDelay = 300;
+  t.dev.onConnect = (path) => {
+    if (path === '/econet/rmCurrNewParam') {
+      void t.gladys.fake.configUpdated({ ...CONFIG, allow_commands: false });
+    }
+  };
+  const ack = await t.command('dhw-setpoint', 50);
+  assert.match(ack.error, /désactivées/);
+  assert.equal(setpoints(t).length, 0);
+});
+
+for (const latency of [500, 700, 900]) {
+  test(`a scene of 3 commands on a module answering in ${latency} ms: all sent`, async () => {
+    const t = await setup({ config: ALLOW });
+    await t.connect();
+    t.dev.curr.mode = 0;
+    t.dev.latency = latency;
+    const device = { external_id: DEVICE };
+    const send = (role, value) => t.gladys.fake.setValue(device, { external_id: F(role) }, value);
+    const acks = [send('boiler-control', 'on')];
+    await new Promise((resolve) => setImmediate(resolve));
+    acks.push(send('boiler-setpoint', 70));
+    await new Promise((resolve) => setImmediate(resolve));
+    acks.push(send('dhw-setpoint', 55));
+    const outcome = await t.during(Promise.all(acks), 6 * SECOND, 10);
+    assert.equal(t.dev.requests.filter((r) => r.path === '/econet/newParam').length, 1);
+    assert.equal(setpoints(t).length, 2);
+    if (latency <= 700) {
+      assert.deepEqual(outcome.value, [{ success: true }, { success: true }, { success: true }]);
+    }
+    assert.equal(t.dev.peak, 1);
+  });
+}
+
+test('a setpoint alone on a module answering in 900 ms: set and confirmed', async () => {
+  const t = await setup({ config: ALLOW });
+  await t.connect();
+  t.dev.latency = 900;
+  assert.deepEqual(await t.command('dhw-setpoint', 50), { success: true });
 });

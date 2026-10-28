@@ -14,7 +14,19 @@ to date at the end of every milestone.
       pause, getConfig() retried without end; en/fr, docs, cover. Tested
       against a fake module (fixtures of the reference) and servers on
       127.0.0.1, virtual and real clock (x20), Node 22 and 24.
-- [ ] **Review** (xhigh: heating commands, undocumented local API).
+- [x] **Review 1 fixes** (2026-10-28, review r1 of 5a1caea): B1 a stop that
+      never left is sent again at each read without limit (only 401/403
+      refusals count, 3 at most), never to another module, also on a new
+      session; I1 burning off (or off) seen after the stop ends the resends
+      (phase `stopping`); I2 batches gathered for 50 ms, fresh read bounded by
+      the budget only, bounds from the last periodic read, 4 s / 4.5 s, motive
+      "not sent in time"; I3 a 401/403 of a write refuses that command only
+      (no stop of the reads, no print); I4 /data unreadable refuses the
+      setpoints too; I5 tests for the four guards; m1 resend deadlines as a
+      click; m2 only running modes count for a start elsewhere, unreadable
+      count = 0; m3 the SDK's configuration used when ours fails at the start;
+      m4 burning off shows "Off"; m5 status punctuation.
+- [ ] **Review r2**.
 - [ ] **Milestone 2 — real module**: run against a real ecoNET300 (see
       "To check"); turn its answers (anonymized) into fixtures.
 
@@ -67,19 +79,23 @@ to date at the end of every milestone.
   password (one try), /data unreadable, a device not read yet; cancels the
   commands not sent yet (epoch checked in beforeSend); tried again 250 ms
   when it cannot connect, then kept `unsent` in /data and sent again first
-  by the next reads (3 tries) and at a restart before any read. Success when
-  a read after it shows mode 0, or mode 7 after a running state. Its guard
-  (`stop` in /data) is never lifted by time: "On" leaving (saved in /data
-  first, refused when /data cannot be written), or a running state read
-  twice in a row after mode 0 was seen. Not seen off yet and read running
-  (not 7): sent again, 3 times at most. A module answering other than "OK"
+  by the next reads without limit (only 401/403 refusals count, 3 at most;
+  review B1), at a restart before any read and on a new session. Success
+  when a read after it shows mode 0, or mode 7 after a running state. Its
+  guard (`stop` in /data) is never lifted by time: "On" leaving (saved in
+  /data first, refused when /data cannot be written), or a running state
+  (RUNNING_MODES: not alarm nor service modes) read twice in a row after mode
+  0 or 7 was seen. Not seen off nor burning off yet and read running: sent
+  again, 3 times at most; once seen, never (review I1). A module answering other than "OK"
   drops it (resending would change nothing).
 - **Setpoints while a stop of Gladys holds**: refused (a setpoint could
   restart the boiler); "On" first.
 - **Commands**: one option (`allow_commands`) for "On" and both setpoints,
   as the brief asks. Batches: the commands waiting together share one fresh
   read and one confirming read (a scene setting the three at once fits).
-  Sent by 3.5 s after the click, answer and confirmation by 4.3 s; success
+  Gathered for 50 ms; sent by 4 s after the click, answer and confirmation
+  by 4.5 s (measured: a scene of 3 at 700 ms per request confirmed, at
+  900 ms sent, confirmed by the follow-up reads); success
   only when a read shows the value (equal to the value before = not applied
   yet); setpoint guards (90 s or until seen) make a new command always leave.
 - **Bounds**: those of `rmCurrentDataParamsEdits` read in the fresh read

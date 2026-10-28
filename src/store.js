@@ -15,8 +15,9 @@
 //     restart loop never reads faster than the interval;
 //   - `stop`: the stop of the boiler sent from Gladys, until a click on
 //     "On" (with the option) or a start seen twice in a row after the stop
-//     was seen applied (see src/app.js): { key (the module), phase
-//     ('unsent', 'sent', 'confirmed'), tries, resends, starts }.
+//     was seen taken (see src/app.js): { key (the module), phase
+//     ('unsent', 'sent', 'stopping' = burning off seen, 'confirmed' = off
+//     seen), tries (refusals 401/403 by the module), resends, starts }.
 // Never a secret in clear. Read back bounded (a clock moved or a file edited
 // by hand never gives a pause longer than its maximum; a date in the future
 // is invalid), only known keys of the expected shape (never an inherited or
@@ -94,7 +95,7 @@ export function memoryStore(initial = null, { failing = false, unreadable = fals
 }
 
 const KEY = /^[0-9a-f]{16}$/;
-const PHASES = new Set(['unsent', 'sent', 'confirmed']);
+const PHASES = new Set(['unsent', 'sent', 'stopping', 'confirmed']);
 const count = (value, max) =>
   Number.isSafeInteger(value) && value >= 0 ? Math.min(value, max) : max;
 
@@ -113,7 +114,8 @@ function readStop(raw) {
     // A count that cannot be read counts as spent: never more sends than allowed.
     tries: count(own(raw, 'tries'), TIMINGS.stopResends),
     resends: count(own(raw, 'resends'), TIMINGS.stopResends),
-    starts: count(own(raw, 'starts'), 1),
+    // An unreadable count of starts is none (one read never lifts the guard).
+    starts: Number.isSafeInteger(own(raw, 'starts')) && own(raw, 'starts') === 1 ? 1 : 0,
   };
 }
 

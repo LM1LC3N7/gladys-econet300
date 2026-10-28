@@ -22,5 +22,9 @@ the notes of the version's GitHub Release.
 - "Off" (boiler stopped) needs no option and is held by nothing but a
   missing configuration or another module at the address; kept in `/data`
   and sent again by the reads when it could not leave.
+- "Off" that could not leave is sent again at every read until it leaves;
+  a boiler burning off after a stop is never stopped again; a scene setting
+  several features of a slow module sends them all; a 401/403 on a command
+  no longer stops the reads (review r1).
 - Refused credentials stop the reads (no automatic retry); HTTP 429/5xx
   pause them; "Test the connection" button. English and French.

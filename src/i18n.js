@@ -129,8 +129,12 @@ export const STATUS_TEXTS = {
   ),
   unknown: both('State not read', 'État non lu'),
   stopUnsent: both(
-    'Stop from Gladys not sent yet: sent again by the next reads',
-    'Arrêt depuis Gladys pas encore envoyé : renvoyé par les prochaines lectures',
+    'Stop from Gladys not sent yet: sent again at each read',
+    'Arrêt depuis Gladys pas encore envoyé : renvoyé à chaque lecture',
+  ),
+  stopRefused: both(
+    'Stop from Gladys refused 3 times by the ecoNET300 (HTTP 401/403): not sent again',
+    'Arrêt depuis Gladys refusé 3 fois par l’ecoNET300 (HTTP 401/403) : plus renvoyé',
   ),
   stopUnapplied: both(
     'Stop from Gladys sent but the boiler still runs',
@@ -174,10 +178,10 @@ export const T = {
   connected: (model) =>
     both(`Connected to ${model ?? 'the ecoNET300'}`, `Connecté à ${model ?? 'l’ecoNET300'}`),
   nextRead: (wait) => both(`Next read in ${wait.en}`, `Prochaine lecture dans ${wait.fr}`),
-  stopNote: (text) => both(` ${text.en}.`, ` ${text.fr}.`),
+  withNote: (text, note) => both(`${text.en}. ${note.en}.`, `${text.fr}. ${note.fr}.`),
   unreadable: both(
-    ' /data unreadable: nothing is saved, the start and the setpoints are refused.',
-    ' /data illisible : rien n’est enregistré, la marche et les consignes sont refusées.',
+    '/data unreadable: nothing is saved, the start and the setpoints are refused.',
+    '/data illisible : rien n’est enregistré, la marche et les consignes sont refusées.',
   ),
   test: {
     next: (wait) =>
@@ -271,6 +275,10 @@ export const ERRORS = {
     '/data cannot be read or written: nothing sent.',
     '/data ne peut être lu ou écrit : rien envoyé.',
   ),
+  queueLate: both(
+    'Not sent in time, the commands before it took the time: nothing sent.',
+    'Pas partie à temps, les commandes avant elle ont pris le temps : rien envoyé.',
+  ),
   tooSlow: both(
     'The ecoNET300 did not answer in time: nothing sent.',
     'L’ecoNET300 n’a pas répondu à temps : rien envoyé.',
@@ -305,8 +313,8 @@ export const ERRORS = {
   ),
   stopUnsent: (reason) =>
     both(
-      `Stop not sent (${reason}): sent again by the next reads, 3 times at most.`,
-      `Arrêt non envoyé (${reason}) : renvoyé par les prochaines lectures, 3 fois au plus.`,
+      `Stop not sent (${reason}): sent again at each read until it leaves.`,
+      `Arrêt non envoyé (${reason}) : renvoyé à chaque lecture jusqu’à ce qu’il parte.`,
     ),
   stopUnconfirmed: (reason) =>
     both(

@@ -32,24 +32,30 @@
 //     yet. Refused only without a usable configuration, or when the last read
 //     showed positively another ecoNET300 at the address (docs list it);
 //   - a stop that could not connect is tried again for 250 ms, then kept in
-//     /data and sent again by the next reads (3 times at most), first thing
-//     at a restart;
+//     /data and sent again first thing by every next read, without limit,
+//     until it leaves (at a restart and on a new session too), never to
+//     another module read at the address; refused 401/403 by the module:
+//     sent again twice at most (never a refusal of the credentials);
 //   - it cancels the commands not sent yet (an epoch checked right before
 //     each one leaves): nothing begun before the stop leaves after it;
 //   - its guard is never lifted by time: only by "On" leaving (with the
-//     option), or by a start read twice in a row after the stop was seen
-//     applied (mode 0). Until the stop is seen applied, a read showing the
-//     boiler running (not burning off) sends it again, 3 times at most;
+//     option), or by a running state read twice in a row after the stop
+//     was seen taken (mode 0 off, or 7 burning off). Until then, a read
+//     showing the boiler running sends it again, 3 times at most; once
+//     taken, never again;
 //   - success only when a read after it shows the boiler off (mode 0), or
 //     burning off (mode 7) when the read before showed it running.
 //
-// The other commands: decided on a fresh read (identity, values, bounds of
-// the controller), never on the values in memory; one at a time, in order,
+// The other commands: those arriving together (50 ms) form a batch that
+// shares one fresh read (identity, values; the bounds of the controller
+// from the last periodic read when recent, else read too), never the
+// values in memory; then each leaves in order and one read confirms them;
 // 4 waiting at most; the option and the epoch checked on arrival, after the
-// read and right before the request leaves; sent by 3.5 s after the click or
-// refused unsent; success only when a read shows the value asked (equal to
-// the value before = not applied yet); "On" lifts the guard of the stop only
-// once that is saved in /data, and is refused when /data cannot be written.
+// read and right before the request leaves; sent by 4 s after the click or
+// refused unsent; success only when a read before 4.5 s shows the value
+// asked (equal to the value before = not applied yet); refused while /data
+// cannot be read; a 401/403 refuses that command only. "On" lifts the guard
+// of the stop only once that is saved in /data.
 // -----------------------------------------------------------------------------
 
 import { DEVICE_TRANSPORTS, createLogger } from '@gladysassistant/integration-sdk';
@@ -63,6 +69,7 @@ import {
   MINUTE,
   MODE_BURNING_OFF,
   MODE_OFF,
+  RUNNING_MODES,
   SECOND,
   SETPOINTS,
   TIMINGS,
@@ -85,6 +92,9 @@ import { StatePublisher } from './publisher.js';
 import { memoryStore, normalizeMemory, refusalPrint, serializeMemory } from './store.js';
 
 const FOLLOW_MAX = 16;
+
+/** A running state of the boiler (firing up, operation, supervision...), not an alarm nor a service mode. */
+const isRunning = (mode) => RUNNING_MODES.has(mode);
 
 export class EconetApp {
   constructor({
@@ -263,9 +273,17 @@ export class EconetApp {
         `Reading the configuration failed (${err?.message ?? 'error'}): next try in ${wait / SECOND} s`,
       );
       if (!this.configRead) {
-        await this.loadMemory();
-        this.lastStatus = undefined;
-        await this.setStatus(false, T.configWait(age(wait)));
+        const fallback = this.gladys.config;
+        if (fallback && typeof fallback === 'object' && Object.keys(fallback).length > 0) {
+          // The SDK read the configuration just before `connected`: used
+          // meanwhile (a stop is never refused for want of it); ours is read
+          // again below and applied when it comes.
+          await this.applyConfig(fallback, { reconnected: false });
+        } else {
+          await this.loadMemory();
+          this.lastStatus = undefined;
+          await this.setStatus(false, T.configWait(age(wait)));
+        }
       }
       retry.timer = this.timers.setTimeout(() => {
         retry.timer = undefined;
@@ -352,7 +370,7 @@ export class EconetApp {
     }
     await this.setStatus(false, T.connecting);
     // A stop kept in /data that never left goes first, without waiting for a read.
-    if (this.memory.stop?.phase === 'unsent' && this.memory.stop.tries < TIMINGS.stopResends) {
+    if (this.stopToResend(session)) {
       void this.resendStop(session, 'restart');
     }
     // A restart never reads sooner than the interval after the last read
@@ -504,6 +522,10 @@ export class EconetApp {
       await session.following.catch(() => {});
     }
     const generation = this.generation;
+    // A stop that never left goes first, whatever holds the reads.
+    if (this.stopToResend(session)) {
+      await this.resendStop(session, 'read');
+    }
     const mono = this.monotonic();
     if (this.pauseLeft(mono) > 0) {
       this.halted(session, 'busy', this.pauseLeft(mono));
@@ -519,9 +541,6 @@ export class EconetApp {
         // On disk before the read leaves (at most once a minute, or once an interval).
         this.memory.lastReadAt = now;
         await this.saveMemory();
-      }
-      if (this.memory.stop?.phase === 'unsent' && this.memory.stop.tries < TIMINGS.stopResends) {
-        await this.resendStop(session, 'read');
       }
       try {
         await this.read(session, generation);
@@ -570,10 +589,13 @@ export class EconetApp {
     if (generation !== this.generation) {
       return;
     }
-    let limits = session.data?.system.key === system.key ? session.data?.limits : undefined;
+    // The bounds of this read only (a follow-up read keeps those of the
+    // periodic read before it): a module that stops giving them leaves none.
+    let limits =
+      follow && session.data?.system.key === system.key ? session.data?.limits : undefined;
     if (!follow && values) {
       try {
-        limits = limitsOf(await client.edits()) ?? limits;
+        limits = limitsOf(await client.edits());
       } catch (err) {
         // Secondary: never blocking, never a refusal (some modules answer 404).
         if (err?.code === CODES.ABORTED) {
@@ -772,13 +794,13 @@ export class EconetApp {
       return undefined;
     }
     if (stop.phase === 'unsent') {
-      return STATUS_TEXTS.stopUnsent;
+      return stop.tries >= TIMINGS.stopResends ? STATUS_TEXTS.stopRefused : STATUS_TEXTS.stopUnsent;
     }
     if (stop.phase === 'confirmed') {
       return STATUS_TEXTS.stopped;
     }
     const mode = this.session?.data?.values?.mode;
-    const running = mode !== undefined && mode !== MODE_OFF && mode !== MODE_BURNING_OFF;
+    const running = stop.phase === 'sent' && mode !== undefined && isRunning(mode);
     return running && stop.resends >= TIMINGS.stopResends
       ? STATUS_TEXTS.stopUnapplied
       : STATUS_TEXTS.stopPending;
@@ -868,7 +890,7 @@ export class EconetApp {
     }
     const note = this.stopNote(data.system.key);
     const text = T.connected(data.system.model);
-    return [true, note ? join(text, T.stopNote(note)) : text];
+    return [true, note ? T.withNote(text, note) : text];
   }
 
   /** A device was created (or updated): its last values, if recent, at once. */
@@ -1009,6 +1031,9 @@ export class EconetApp {
       return;
     }
     this.working = (async () => {
+      // Commands arriving together (a scene: one WebSocket frame each) are
+      // gathered first, so that they share one fresh read.
+      await new Promise((resolve) => this.timers.setTimeout(resolve, TIMINGS.batchWindow));
       while (this.pending.length > 0) {
         const batch = this.pending.splice(0);
         try {
@@ -1040,6 +1065,10 @@ export class EconetApp {
     }
     if (!session || generation !== this.generation || this.session !== session) {
       throw this.refusal(ERRORS.noConfig);
+    }
+    if (this.memoryBroken) {
+      // A stop of Gladys kept there is unknown: unreadable is not empty.
+      throw this.refusal(ERRORS.unreadableData);
     }
     if (role !== F.BOILER_CONTROL && this.memory.stop?.key === key) {
       // A setpoint may restart a boiler stopped from Gladys: "On" first.
@@ -1088,7 +1117,8 @@ export class EconetApp {
       try {
         this.check(item.ctx);
         if (item.sendBy - TIMINGS.commandMinSend <= this.monotonic()) {
-          throw this.refusal(ERRORS.tooSlow);
+          // Its budget went on the commands before it.
+          throw this.refusal(ERRORS.queueLate);
         }
         live.push(item);
       } catch (err) {
@@ -1099,10 +1129,8 @@ export class EconetApp {
       return;
     }
     const earliest = Math.min(...live.map((item) => item.sendBy));
-    const readBy = Math.min(
-      this.monotonic() + TIMINGS.commandReadMax,
-      earliest - TIMINGS.commandMinSend,
-    );
+    // The read must end with time left for the first one to leave.
+    const readBy = earliest - TIMINGS.commandMinSend;
     const { client } = session;
     const options = { priority: PRIORITY.COMMAND, sendBy: readBy, answerBy: readBy };
     let system;
@@ -1112,7 +1140,12 @@ export class EconetApp {
       system = systemOf(await client.sysParams(options));
       if (system?.key) {
         values = valuesOf(await client.regParams(options));
-        if (values && live.some((item) => item.target.role !== F.BOILER_CONTROL)) {
+        // The bounds of the controller from the last periodic read of the
+        // same module when recent (they are settings, not states), else read now.
+        const recent = this.freshData();
+        if (recent?.system.key === system.key && recent.limits) {
+          limits = recent.limits;
+        } else if (values && live.some((item) => item.target.role !== F.BOILER_CONTROL)) {
           try {
             limits = limitsOf(await client.edits(options));
           } catch (err) {
@@ -1290,15 +1323,17 @@ export class EconetApp {
       return this.refusal(ERRORS.rejected(err.result));
     }
     if (!err.sent) {
+      // LATE here: the fresh read went through, the commands before it took the time.
       return err.code === CODES.LATE
-        ? this.refusal(ERRORS.tooSlow)
+        ? this.refusal(ERRORS.queueLate)
         : this.refusal(ERRORS.notSent(reason));
     }
     if (err.code === CODES.ABORTED) {
       return this.refusal(ERRORS.sentUnconfirmed(reason));
     }
     if (err.code === CODES.HTTP && err.status >= 400 && err.status <= 499 && err.status !== 429) {
-      this.block(err);
+      // Refused for this command only: a 401/403 of a write is no refusal of
+      // the credentials (the reads go on, no print of a password that reads).
       return this.refusal(ERRORS.rejected(`HTTP ${err.status}`));
     }
     this.block(err);
@@ -1368,18 +1403,15 @@ export class EconetApp {
       const before = session.data?.values?.mode;
       const after = await this.readAfter(session, received + TIMINGS.commandAnswerBy);
       const stop = this.memory.stop;
-      if (after?.mode === MODE_OFF && stop?.key === key && stop.phase === 'sent') {
-        // A read that left after the stop shows it applied.
-        stop.phase = 'confirmed';
+      const off = after?.mode === MODE_OFF;
+      const burningOff =
+        after?.mode === MODE_BURNING_OFF && before !== undefined && isRunning(before);
+      if ((off || burningOff) && stop?.key === key && stop.phase === 'sent') {
+        // A read that left after the stop shows it taken: no resend from now on.
+        stop.phase = off ? 'confirmed' : 'stopping';
         void this.saveMemory();
       }
-      const applied =
-        after?.mode === MODE_OFF ||
-        (after?.mode === MODE_BURNING_OFF &&
-          before !== undefined &&
-          before !== MODE_OFF &&
-          before !== MODE_BURNING_OFF);
-      if (!applied) {
+      if (!off && !burningOff) {
         throw this.refusal(ERRORS.stopNotYet);
       }
       return;
@@ -1394,10 +1426,17 @@ export class EconetApp {
    */
   async sendStop(session, options) {
     this.stopping = (this.stopping ?? 0) + 1;
+    let outcome;
     try {
-      return await this.sendStopOnce(session, options);
+      outcome = await this.sendStopOnce(session, options);
+      return outcome;
     } finally {
       this.stopping -= 1;
+      if (!outcome?.ok && this.session && this.session !== session) {
+        // The session changed meanwhile (other credentials saved): a stop
+        // that never left goes on the new one at once.
+        void this.resendStop(this.session, 'new session');
+      }
     }
   }
 
@@ -1448,10 +1487,17 @@ export class EconetApp {
       await this.saveMemory();
       return { error: ERRORS.rejected(err.result) };
     }
-    if (isAuthRefused(err) && !this.memory.refused) {
-      this.block(err);
+    if (isAuthRefused(err)) {
+      // Refused by the module for this write (never a refusal of the
+      // credentials, no print): counted, sent again twice at most.
+      if (current) {
+        current.tries += 1;
+      }
+      await this.saveMemory();
+      return { error: ERRORS.stopUnsent(reason) };
     }
-    if (!err.sent || isAuthRefused(err)) {
+    if (!err.sent) {
+      // Never left: kept, sent again at each read until it leaves.
       await this.saveMemory();
       return { error: ERRORS.stopUnsent(reason) };
     }
@@ -1465,27 +1511,42 @@ export class EconetApp {
     return { error: ERRORS.stopUnconfirmed(reason) };
   }
 
-  /** A stop kept in /data that never left: sent again (3 times at most), not waited for by a click. */
-  async resendStop(session, why) {
+  /** Whether a stop kept in /data that never left is to be sent again now. */
+  stopToResend(session) {
     const stop = this.memory.stop;
-    if (!stop || stop.phase !== 'unsent' || stop.tries >= TIMINGS.stopResends || this.stopping) {
+    const known = session.data?.system.key;
+    return Boolean(
+      stop &&
+      stop.phase === 'unsent' &&
+      // Only refusals by the module (401/403) count; a stop that could not
+      // connect is sent again at each read, without end.
+      stop.tries < TIMINGS.stopResends &&
+      !this.stopping &&
+      // Never to another module read at the address (as a click).
+      !(known && known !== stop.key),
+    );
+  }
+
+  /** A stop kept in /data that never left: sent again, not waited for by a click. */
+  async resendStop(session, why) {
+    if (!this.stopToResend(session)) {
       return;
     }
-    stop.tries += 1;
-    this.logger.warn(`ecoNET300: stop sent again (${why}, ${stop.tries}/${TIMINGS.stopResends})`);
+    this.logger.warn(`ecoNET300: stop sent again (${why})`);
     const mono = this.monotonic();
     await this.sendStop(session, {
       sendBy: mono + TIMINGS.commandSendBy,
-      answerBy: mono + TIMINGS.requestTimeout,
+      answerBy: mono + TIMINGS.commandAnswerBy,
     });
   }
 
   /**
    * A read through the guards. The stop of Gladys (reads begun after it
-   * left only): mode 0 = applied; once applied, a start read twice in a row
-   * = started elsewhere, the guard lifted; not applied yet and running (not
-   * burning off) = sent again, 3 times at most. The setpoint guards: lifted
-   * when the value asked shows after a move, or after 90 s.
+   * left only): mode 0 = applied, mode 7 = taken (burning off): no resend
+   * after either; once taken, a running state read twice in a row = started
+   * elsewhere, the guard lifted; not taken yet and running = sent again,
+   * 3 times at most. The setpoint guards: lifted when the value asked shows
+   * after a move, or after 90 s.
    */
   observe(session, startedAt) {
     const { system, values } = session.data;
@@ -1497,13 +1558,20 @@ export class EconetApp {
       startedAt > this.stopSentAt
     ) {
       const mode = values.mode;
+      const taken = stop.phase === 'confirmed' || stop.phase === 'stopping';
       if (mode === MODE_OFF) {
         if (stop.phase !== 'confirmed' || stop.starts !== 0) {
           stop.phase = 'confirmed';
           stop.starts = 0;
           void this.saveMemory();
         }
-      } else if (stop.phase === 'confirmed') {
+      } else if (mode === MODE_BURNING_OFF) {
+        if (stop.phase === 'sent' || stop.starts !== 0) {
+          stop.phase = stop.phase === 'sent' ? 'stopping' : stop.phase;
+          stop.starts = 0;
+          void this.saveMemory();
+        }
+      } else if (taken && isRunning(mode)) {
         stop.starts += 1;
         if (stop.starts >= 2) {
           this.logger.info('ecoNET300: boiler started elsewhere after the stop from Gladys');
@@ -1512,7 +1580,7 @@ export class EconetApp {
         void this.saveMemory();
       } else if (
         stop.phase === 'sent' &&
-        mode !== MODE_BURNING_OFF &&
+        isRunning(mode) &&
         stop.resends < TIMINGS.stopResends &&
         !this.stopping
       ) {
@@ -1524,7 +1592,7 @@ export class EconetApp {
         const mono = this.monotonic();
         void this.sendStop(session, {
           sendBy: mono + TIMINGS.commandSendBy,
-          answerBy: mono + TIMINGS.requestTimeout,
+          answerBy: mono + TIMINGS.commandAnswerBy,
         });
       }
     }

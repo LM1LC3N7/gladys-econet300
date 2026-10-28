@@ -54,7 +54,8 @@ aux assistants vocaux de :
 
 - mettre la chaudière en **Marche** ;
 - changer la **consigne de la chaudière**, dans les bornes que donne le
-  régulateur (lues avant chaque envoi) et entre 20 et 90 °C ;
+  régulateur (celles de la dernière lecture si elle a moins de deux
+  intervalles, sinon relues avant l'envoi) et entre 20 et 90 °C ;
 - changer la **consigne de l'eau chaude**, en degrés entiers, dans les bornes
   du régulateur, entre 20 °C et le plafond configuré : **65 °C par défaut, de
   40 à 65 °C, jamais plus de 65 °C** quoi qu'on saisisse ou que le régulateur
@@ -63,18 +64,24 @@ aux assistants vocaux de :
 Ce ne sont ni des interrupteurs ni des binaires : un « tout éteindre » d'une
 scène ou d'un assistant vocal n'atteint pas la chaudière.
 
-Chaque commande relit d'abord le module (son identité, ses valeurs, ses
-bornes) et décide sur cette lecture, jamais sur les valeurs gardées en
-mémoire. Elle part au plus tard 3,5 s après le clic, sinon elle est refusée
-sans rien envoyer. Elle n'est annoncée réussie que si une lecture faite
-après elle montre la valeur demandée ; sinon Gladys affiche « envoyée et
-acceptée, pas encore appliquée » (ou « envoyée, sans confirmation » si le
-module n'a pas répondu), et les lectures de suivi, 5 s et 20 s plus tard,
-publient la valeur dès qu'elle apparaît. Les commandes passent une à une ;
-au-delà de 4 en attente, elles sont refusées.
+Chaque commande relit d'abord le module (son identité et ses valeurs) et
+décide sur cette lecture, jamais sur les valeurs gardées en mémoire ; les
+commandes arrivées ensemble (une scène) partagent cette relecture et la
+lecture qui les confirme, puis partent une à une. Une commande part au plus
+tard 4 s après le clic, sinon elle est refusée sans rien envoyer (« pas
+partie à temps » quand les commandes avant elle ont pris le temps). Elle
+n'est annoncée réussie que si une lecture faite après elle, avant 4,5 s,
+montre la valeur demandée ; sinon Gladys affiche « envoyée et acceptée, pas
+encore appliquée » (ou « envoyée, sans confirmation » si le module n'a pas
+répondu), et les lectures de suivi, 5 s et 20 s plus tard, publient la
+valeur dès qu'elle apparaît. Au-delà de 4 commandes en attente, elles sont
+refusées. Un refus HTTP 401/403 d'une commande ne concerne qu'elle : les
+lectures continuent.
 
-Une consigne ou « Marche » est refusée tant qu'un arrêt envoyé depuis Gladys
-tient (voir ci-dessous) : remettez d'abord la chaudière en « Marche ».
+Une consigne est refusée tant qu'un arrêt envoyé depuis Gladys tient (voir
+ci-dessous) : remettez d'abord la chaudière en « Marche ». Quand /data ne
+peut être lu, « Marche » et les consignes sont refusées (un arrêt gardé y
+serait inconnu).
 
 ## L'arrêt
 
@@ -94,31 +101,35 @@ Il est refusé dans ces deux cas seulement :
 - la dernière lecture a montré un **autre** ecoNET300 à cette adresse (un
   identifiant différent).
 
-Quand il ne peut pas partir (module injoignable), il est retenté pendant
-250 ms, puis gardé dans /data et renvoyé en tête de chacune des lectures
-suivantes, 3 fois au plus (après une pause demandée par le module, et après
-de nouveaux identifiants si les leurs ont été refusés, puisque les lectures
-attendent alors), et dès le redémarrage de l'intégration. Quand il
-part sans réponse, Gladys affiche « arrêt envoyé, sans confirmation ». Quand
-le module le refuse (réponse autre que « OK »), Gladys l'affiche et il n'est
-pas renvoyé.
+Quand il ne peut pas partir (module injoignable, coupure), il est retenté
+pendant 250 ms, puis gardé dans /data et renvoyé en tête de chaque lecture
+suivante, sans limite, jusqu'à ce qu'il parte : il part donc à la première
+lecture qui joint le module (après une pause demandée par le module, ou de
+nouveaux identifiants s'ils ont été refusés, les lectures attendant alors), et dès le redémarrage de l'intégration ou un
+changement de configuration. Il n'est pas renvoyé à un autre ecoNET300 lu à
+l'adresse. Quand le module le refuse en HTTP 401/403, il est renvoyé 2 fois
+au plus, puis l'état le dit. Quand il part sans réponse, Gladys affiche
+« arrêt envoyé, sans confirmation ». Quand le module répond autre chose que
+« OK », Gladys l'affiche et il n'est pas renvoyé.
 
 Il est annoncé réussi quand une lecture faite après lui montre la chaudière
 à l'arrêt, ou en extinction alors qu'elle fonctionnait juste avant. Une
-chaudière à granulés s'éteint en plusieurs minutes : tant qu'elle est en
-extinction, rien n'est renvoyé. Si une lecture faite après l'arrêt montre la
-chaudière en fonctionnement (ni arrêtée ni en extinction) alors qu'elle n'a
-pas encore été vue arrêtée, l'arrêt est renvoyé, 3 fois au plus.
+chaudière à granulés s'éteint en plusieurs minutes ; le sélecteur montre
+« Arrêt » pendant l'extinction. Dès qu'une lecture faite après l'arrêt la
+montre à l'arrêt ou en extinction, plus rien n'est renvoyé. Si une lecture
+faite après l'arrêt la montre en marche alors qu'elle n'a encore été vue ni
+à l'arrêt ni en extinction, l'arrêt est renvoyé, 3 fois au plus.
 
 L'arrêt depuis Gladys est gardé dans /data, sans limite de durée. Il est levé
 seulement par un clic sur « Marche » (avec l'option), ou quand, après avoir
-été vue arrêtée, la chaudière est lue en marche deux fois de suite (remise en
-marche sur le panneau ou par l'application).
+été vue à l'arrêt ou en extinction, la chaudière est lue en marche (allumage,
+fonctionnement, surveillance..., pas une alarme ni un mode de service) deux
+fois de suite (remise en marche sur le panneau ou par l'application).
 
 ## État et erreurs
 
-- **Nom d'utilisateur ou mot de passe refusés** (HTTP 401/403) : les lectures
-  s'arrêtent, sans nouvel essai automatique ; enregistrez d'autres
+- **Nom d'utilisateur ou mot de passe refusés** (HTTP 401/403 d'une
+  lecture) : les lectures s'arrêtent, sans nouvel essai automatique ; enregistrez d'autres
   identifiants ou utilisez « Tester la connexion ».
 - **Le module demande de ralentir** (HTTP 429 ou 5xx) : pause de 1 min à 6 h,
   gardée dans /data, pour tout sauf l'arrêt.
@@ -152,10 +163,11 @@ secret.
   l'état de la liaison le dit.
 - Mode été/hiver, circuits mélangés en écriture, puissance du brûleur,
   pompes : pas dans cette version.
-- Avec un module très lent (près d'une seconde par requête), une scène qui
-  change plusieurs consignes à la fois peut voir la dernière refusée « rien
-  envoyé » : les commandes partagent une seule relecture, mais chaque envoi
-  compte.
+- Module lent, mesuré sur un serveur local : une scène « Marche » + deux
+  consignes est envoyée et confirmée jusqu'à 700 ms par requête ; à 900 ms,
+  les trois partent mais la confirmation vient des lectures de suivi
+  (« pas encore appliquée » à l'écran). Une consigne seule est confirmée
+  jusqu'à 900 ms.
 
 ## Crédits
 

@@ -134,14 +134,14 @@ test('Off unreachable: tried again for 250 ms, kept in /data, sent again by the 
   t.dev.route = () => 'refuse';
   const ack = await t.command('boiler-control', 'off');
   assert.equal(ack.success, false);
-  assert.match(ack.error, /Arrêt non envoyé \(unreachable\) : renvoyé par les prochaines lectures/);
+  assert.match(ack.error, /Arrêt non envoyé \(unreachable\) : renvoyé à chaque lecture/);
   assert.ok(t.dev.unsent >= 3, `${t.dev.unsent} tries within 250 ms`);
   assert.ok(t.dev.unsent <= 6);
   assert.equal(store.data.stop.phase, 'unsent');
   await t.wait(SECOND);
   assert.equal(
     last(t.gladys, 'status'),
-    'Arrêt depuis Gladys pas encore envoyé : renvoyé par les prochaines lectures',
+    'Arrêt depuis Gladys pas encore envoyé : renvoyé à chaque lecture',
   );
   const unsent = t.dev.unsent;
   // The module comes back: the next read sends the stop first.
@@ -150,23 +150,58 @@ test('Off unreachable: tried again for 250 ms, kept in /data, sent again by the 
   const at = t.dev.requests.findIndex(isStop);
   assert.ok(at >= 0, 'sent by the read');
   assert.ok(t.dev.requests.slice(0, at).every((r) => r.path !== '/econet/sysParams' || true));
-  assert.equal(store.data.stop.tries, 1);
   assert.equal(store.data.stop.phase, 'confirmed');
   assert.ok(t.dev.unsent >= unsent);
 });
 
-test('a stop never sent is sent again 3 times at most, then said in the status', async () => {
+test('a stop that never left is never given up: a long outage, then sent at the first read', async () => {
   const store = memoryStore();
   const t = await setup({ store });
   await t.connect();
-  t.dev.route = (path) => (path === '/econet/newParam' ? 'refuse' : undefined);
+  t.dev.route = () => 'refuse';
   await t.command('boiler-control', 'off');
-  for (let i = 0; i < 6; i += 1) {
+  // Reads fail for 25 min (backoff 1, 2, 5, 10, 10 min): the stop never leaves.
+  await t.wait(25 * MINUTE);
+  assert.ok(t.dev.unsent >= 8, `${t.dev.unsent} tries`);
+  assert.equal(store.data.stop.phase, 'unsent');
+  assert.match(statusText(t), /ecoNET300 non lu/);
+  const before = t.dev.requests.length;
+  t.dev.route = undefined;
+  await t.wait(11 * MINUTE);
+  assert.ok(isStop(t.dev.requests[before]), 'the stop first, at the first read that gets through');
+  assert.equal(store.data.stop.phase, 'confirmed');
+});
+
+test('a stop the module refuses (HTTP 403) is sent again twice at most, the reads go on, no print', async () => {
+  const store = memoryStore();
+  const t = await setup({ store });
+  await t.connect();
+  t.dev.route = (path) => (path === '/econet/newParam' ? { status: 403, body: 'no' } : undefined);
+  const ack = await t.command('boiler-control', 'off');
+  assert.match(ack.error, /Arrêt non envoyé \(HTTP 403\)/);
+  for (let i = 0; i < 5; i += 1) {
     await t.wait(61 * SECOND);
   }
-  assert.equal(store.data.stop.tries, 3);
+  assert.equal(stops(t), 3);
+  assert.equal(store.data.refused, false);
+  assert.equal(store.data.fp, '');
+  assert.ok(t.dev.count('/econet/sysParams') >= 6, 'the reads go on');
+  assert.match(statusText(t), /refusé 3 fois par l’ecoNET300 \(HTTP 401\/403\) : plus renvoyé/);
+});
+
+test('a stop kept unsent is never sent again to another module at the address', async () => {
+  const store = memoryStore();
+  const t = await setup({ store });
+  await t.connect();
+  t.dev.route = () => 'refuse';
+  await t.command('boiler-control', 'off');
+  t.dev.route = (path) => (path === '/econet/newParam' ? 'refuse' : undefined);
+  t.dev.uid = OTHER_UID;
+  await t.wait(61 * SECOND);
+  t.dev.route = undefined;
+  await t.wait(5 * MINUTE);
+  assert.equal(stops(t), 0);
   assert.equal(store.data.stop.phase, 'unsent');
-  assert.match(statusText(t), /Arrêt depuis Gladys pas encore envoyé/);
 });
 
 test('a stop kept in /data that never left goes first at a restart, before any read', async () => {
@@ -338,7 +373,7 @@ test('Off acks within the budget even when the module stays silent', async () =>
   t.dev.route = () => 'silent';
   const at = t.clock.monotonic();
   const ack = await t.command('boiler-control', 'off');
-  assert.ok(t.clock.monotonic() - at < 4_500, `${t.clock.monotonic() - at} ms`);
+  assert.ok(t.clock.monotonic() - at < 4_700, `${t.clock.monotonic() - at} ms`);
   assert.match(ack.error, /Arrêt envoyé, sans confirmation \(timeout\)/);
   assert.equal(t.app.memory.stop.phase, 'sent');
 });
@@ -402,4 +437,79 @@ test('burning off with nothing read before the stop: not taken for applied', asy
   assert.equal(stops(t), 1);
   assert.equal(ack.success, false);
   assert.match(ack.error, /ne l’indique pas encore/);
+});
+
+test('burning off seen after the stop: a start on the panel later is never contradicted', async () => {
+  const store = memoryStore();
+  const t = await setup({ store, config: { ...CONFIG, poll_interval: 900 } });
+  await t.connect();
+  await t.create();
+  t.dev.ignoreControl = true;
+  t.dev.route = (path) => {
+    if (path === '/econet/newParam') {
+      t.dev.curr.mode = 7;
+    }
+    return undefined;
+  };
+  assert.deepEqual(await t.command('boiler-control', 'off'), { success: true });
+  assert.equal(store.data.stop.phase, 'stopping');
+  await t.wait(6 * SECOND);
+  assert.equal(last(t.gladys, 'boiler-control'), 'off', 'burning off shows "Off"');
+  // Never read at 0; started again on the panel during the extinction.
+  t.dev.route = undefined;
+  t.dev.curr.mode = 2;
+  await t.wait(40 * MINUTE);
+  assert.equal(stops(t), 1, 'no resend');
+});
+
+test('an alarm after the stop is no start elsewhere; an unreadable count of starts is none', async () => {
+  const store = memoryStore();
+  const t = await setup({ store });
+  await t.connect();
+  await t.command('boiler-control', 'off');
+  await t.wait(25 * SECOND);
+  t.dev.curr.mode = 8;
+  await t.wait(3 * MINUTE);
+  assert.ok(store.data.stop, 'kept');
+  assert.equal(store.data.stop.starts, 0);
+});
+
+test('getConfig() of the integration failing at the start: the SDK one is used, "Off" goes', async () => {
+  let calls = 0;
+  const t = await setup({
+    getConfig: async () => {
+      calls += 1;
+      if (calls === 1) {
+        // The SDK's resynchronization (it fills gladys.config).
+        t.gladys.config = { ...CONFIG };
+        return CONFIG;
+      }
+      throw new Error('HTTP 502');
+    },
+  });
+  await t.connect();
+  assert.equal(t.dev.count('/econet/sysParams'), 1);
+  assert.deepEqual(await t.command('boiler-control', 'off'), { success: true });
+});
+
+test('the status with a stop: one space only', async () => {
+  const t = await setup();
+  await t.connect();
+  await t.command('boiler-control', 'off');
+  await t.wait(6 * SECOND);
+  const text = t.gladys.fake.connectionStatus.message.fr;
+  assert.equal(text, 'Connecté à ecoMAX860P2-N TOUCH. Arrêtée depuis Gladys.');
+  assert.doesNotMatch(text, / {2}/);
+});
+
+test('"Off" while other credentials are saved: never lost, sent on the new session', async () => {
+  const t = await setup({ latency: 200 });
+  await t.connect();
+  const off = t.command('boiler-control', 'off');
+  await t.wait(10);
+  const saved = t.gladys.fake.configUpdated({ ...CONFIG, address: '192.168.1.51' });
+  await t.during(Promise.all([off, saved]));
+  await t.wait(2 * SECOND);
+  assert.ok(stops(t) >= 1);
+  assert.notEqual(t.app.memory.stop.phase, 'unsent');
 });

@@ -33,6 +33,7 @@ import {
   DHW,
   FEATURES as F,
   LIMITS,
+  MODE_BURNING_OFF,
   MODE_OFF,
   SELECTOR_TYPE,
   TEMPERATURES,
@@ -176,9 +177,16 @@ export function parseDeviceId(externalId) {
   return match ? match[1] : undefined;
 }
 
-/** The on/off of the boiler from its operating state: 0 is off, anything else on. */
+/**
+ * The on/off of the boiler from its operating state: 0 (off) and 7 (burning
+ * off, after a stop) are off, anything else on (as the reference reads it).
+ */
 export const controlOf = (mode) =>
-  mode === undefined ? undefined : mode === MODE_OFF ? CONTROL.OFF : CONTROL.ON;
+  mode === undefined
+    ? undefined
+    : mode === MODE_OFF || mode === MODE_BURNING_OFF
+      ? CONTROL.OFF
+      : CONTROL.ON;
 
 /** The roles the values of one read report. */
 export function reportedRoles(values, system) {

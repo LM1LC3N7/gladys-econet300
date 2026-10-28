@@ -25,14 +25,16 @@ User guides: [English](docs/en.md), [français](docs/fr.md).
   setpoint (bounds of the controller, 20 to 90 °C), the hot water setpoint
   (a water heater in whole degrees, bounds of the controller, 20 °C to a
   ceiling of 65 °C by default, 65 °C at most). Decided on a fresh read
-  (identity, values, bounds), checked again right before the request leaves,
-  refused after 3.5 s, successful only when a read shows the value.
+  (identity, values; bounds of the last read), checked again right before
+  the request leaves, refused after 4 s, successful only when a read shows
+  the value; commands arriving together share the reads.
 - **"Off" is the protective command**: no option; it cuts a read under way
   and leaves first, cancels the commands not sent yet, goes through a pause
   or a refused password (one try); kept in `/data` and sent again by the
-  reads (3 times at most) when it could not leave or when the boiler still
-  runs (not burning off) before it was seen off. Its guard is lifted only by
-  "On" or by a start read twice after the stop was seen applied. Its two
+  reads until it leaves (no limit when it could not connect; 3 times at most
+  when refused 401/403, or when the boiler still runs before it was seen off
+  or burning off). Its guard is lifted only by "On" or by a running state
+  read twice after the stop was seen taken. Its two
   refusal cases are listed in the guides.
 - **No switch, no writable binary**: a "turn everything off" never reaches the
   boiler (the on/off is a select).

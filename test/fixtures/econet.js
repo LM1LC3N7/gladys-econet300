@@ -63,7 +63,8 @@ const json = (status, body) => ({ status, body: JSON.stringify(body) });
  * to override an answer ('silent', 'refuse', 'drop', or { status, body }),
  * `ignoreControl` (BOILER_CONTROL answered OK but not applied),
  * `applyDelay` (ms before a write shows), `connectDelay` (ms before the
- * connection is up: beforeSend runs then).
+ * connection is up: beforeSend runs then), `onConnect(path, query)` (called
+ * when a connection starts, before that delay).
  */
 export function fakeEconet({ timers, latency = 0 } = {}) {
   const dev = {
@@ -81,6 +82,7 @@ export function fakeEconet({ timers, latency = 0 } = {}) {
     latency,
     applyDelay: 0,
     connectDelay: 0,
+    onConnect: undefined,
     ignoreControl: false,
     route: undefined,
     /** { path, query, sent } of every request that reached the module. */
@@ -240,6 +242,7 @@ export function fakeEconet({ timers, latency = 0 } = {}) {
           queueMicrotask(reply);
         }
       };
+      dev.onConnect?.(url.pathname, query);
       if (dev.connectDelay > 0) {
         handles.push(timers.setTimeout(connected, dev.connectDelay));
       } else {

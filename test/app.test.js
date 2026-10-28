@@ -461,3 +461,29 @@ test('with a 30 s interval, a restart still waits the interval after the last re
   await b.wait(26 * SECOND);
   assert.equal(b.dev.count('/econet/sysParams'), 1);
 });
+
+test('the button during a pause reads nothing, even past the interval', async () => {
+  const t = await setup();
+  await t.connect();
+  t.dev.route = () => ({ status: 503, body: 'busy' });
+  // Two 503 in a row: the second pause (2 min) outlasts the interval.
+  await t.wait(61 * SECOND);
+  await t.wait(61 * SECOND);
+  t.dev.route = undefined;
+  const count = t.dev.count('/econet/sysParams');
+  await t.wait(61 * SECOND);
+  assert.ok(t.app.pauseLeft() > 0, 'still paused');
+  const ack = await t.during(t.gladys.fake.action('test_connection', {}), 2 * SECOND);
+  assert.ok(ack.ok);
+  assert.match(ack.value.data.message, /demande de ralentir/);
+  assert.equal(t.dev.count('/econet/sysParams'), count, 'nothing read during the pause');
+});
+
+test('a refusal kept without a readable print is never lifted by a restart', async () => {
+  const store = memoryStore({ refused: true, fp: '', salt: 'a'.repeat(32) });
+  const t = await setup({ store });
+  await t.connect();
+  await t.wait(2 * HOUR);
+  assert.equal(t.dev.count('/econet/sysParams'), 0);
+  assert.equal(store.data?.refused ?? true, true);
+});

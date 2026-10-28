@@ -52,7 +52,8 @@ By default Gladys only reads. The option **Allow "On" and the setpoints**
 
 - switch the boiler **On**;
 - change the **boiler setpoint**, within the bounds the controller gives
-  (read before each write) and between 20 and 90 °C;
+  (those of the last read when less than two intervals old, else read again
+  before the write) and between 20 and 90 °C;
 - change the **hot water setpoint**, in whole degrees, within the bounds of
   the controller, between 20 °C and the configured ceiling: **65 °C by
   default, 40 to 65 °C, never more than 65 °C** whatever is typed or the
@@ -61,17 +62,21 @@ By default Gladys only reads. The option **Allow "On" and the setpoints**
 They are neither switches nor binaries: a "turn everything off" of a scene or
 a voice assistant does not reach the boiler.
 
-Each command first reads the module again (its identity, its values, its
-bounds) and decides on that read, never on the values kept in memory. It
-leaves 3.5 s after the click at the latest, else it is refused with nothing
-sent. It is reported successful only when a read made after it shows the
-value asked; otherwise Gladys shows "sent and accepted, not applied yet" (or
-"sent, without confirmation" when the module did not answer), and the
-follow-up reads, 5 s and 20 s later, publish the value as soon as it shows.
-Commands go one at a time; beyond 4 waiting, they are refused.
+Each command first reads the module again (its identity and its values) and
+decides on that read, never on the values kept in memory; commands arriving
+together (a scene) share that read and the read that confirms them, then
+leave one by one. A command leaves 4 s after the click at the latest, else
+it is refused with nothing sent ("not sent in time" when the commands before
+it took the time). It is reported successful only when a read made after it,
+before 4.5 s, shows the value asked; otherwise Gladys shows "sent and
+accepted, not applied yet" (or "sent, without confirmation" when the module
+did not answer), and the follow-up reads, 5 s and 20 s later, publish the
+value as soon as it shows. Beyond 4 commands waiting, they are refused. An
+HTTP 401/403 refusing a command concerns it only: the reads go on.
 
-A setpoint or "On" is refused while a stop sent from Gladys holds (see below):
-switch the boiler "On" first.
+A setpoint is refused while a stop sent from Gladys holds (see below): switch
+the boiler "On" first. When /data cannot be read, "On" and the setpoints are
+refused (a stop kept there would be unknown).
 
 ## The stop
 
@@ -90,30 +95,33 @@ It is refused in these two cases only:
 - the last read showed **another** ecoNET300 at this address (a different
   identifier).
 
-When it cannot leave (module unreachable), it is tried again for 250 ms,
-then kept in /data and sent again first thing by each of the next reads,
-3 times at most (after a pause asked by the module, and after new
-credentials when they were refused, as the reads wait then), and as soon as
-the integration restarts. When it leaves
-without an answer, Gladys shows "stop sent, without confirmation". When the
-module refuses it (an answer other than "OK"), Gladys shows it and it is not
-sent again.
+When it cannot leave (module unreachable, an outage), it is tried again for
+250 ms, then kept in /data and sent again first thing at each next read,
+without limit, until it leaves: it goes at the first read that reaches the
+module (after a pause asked by the module, or new credentials when they were
+refused, as the reads wait then), and as soon as the integration restarts or the configuration
+changes. It is never sent again to another ecoNET300 read at the address.
+When the module refuses it with HTTP 401/403, it is sent again twice at
+most, then the status says so. When it leaves without an answer, Gladys
+shows "stop sent, without confirmation". When the module answers something
+other than "OK", Gladys shows it and it is not sent again.
 
 It is reported successful when a read made after it shows the boiler off,
 or burning off while it was running just before. A pellet boiler takes
-several minutes to go out: while it is burning off, nothing is sent again.
-If a read made after the stop shows the boiler running (neither off nor
-burning off) while it has not been seen off yet, the stop is sent again,
-3 times at most.
+several minutes to go out; the select shows "Off" while it burns off. Once a
+read made after the stop shows it off or burning off, nothing is sent again.
+If a read made after the stop shows it running while it has been seen
+neither off nor burning off yet, the stop is sent again, 3 times at most.
 
 The stop from Gladys is kept in /data, with no time limit. It is lifted only
-by a click on "On" (with the option), or when, after being seen off, the
-boiler is read running twice in a row (started again on the panel or from the
-app).
+by a click on "On" (with the option), or when, after being seen off or
+burning off, the boiler is read running (firing up, operation,
+supervision..., not an alarm nor a service mode) twice in a row (started
+again on the panel or from the app).
 
 ## Status and errors
 
-- **User name or password refused** (HTTP 401/403): the reads stop, no
+- **User name or password refused** (HTTP 401/403 of a read): the reads stop, no
   automatic retry; save other credentials or use "Test the connection".
 - **The module asks to slow down** (HTTP 429 or 5xx): a pause of 1 min to
   6 h, kept in /data, for everything but the stop.
@@ -144,9 +152,10 @@ than the interval), the stop sent from Gladys. No secret.
   so.
 - Summer/winter mode, mixing circuit setpoints, burner output, pumps: not in
   this version.
-- With a very slow module (close to a second per request), a scene changing
-  several setpoints at once may see the last one refused "nothing sent": the
-  commands share one read, but each write counts.
+- Slow module, measured on a local server: a scene "On" + two setpoints is
+  sent and confirmed up to 700 ms per request; at 900 ms the three leave but
+  the confirmation comes from the follow-up reads ("not applied yet" on
+  screen). A setpoint alone is confirmed up to 900 ms.
 
 ## Credits
 
