@@ -83,7 +83,7 @@ import {
   parseFeatureId,
   reportedRoles,
 } from './devices.js';
-import { ERRORS, STATUS_TEXTS, T, age, join, word } from './i18n.js';
+import { ERRORS, STATUS_TEXTS, T, age, word } from './i18n.js';
 import { limitsOf, systemOf, valuesOf } from './model.js';
 import { EconetClient } from './econet/client.js';
 import { CODES, EconetError, isAuthRefused, isBusy, reasonOf } from './econet/errors.js';
@@ -357,6 +357,10 @@ export class EconetApp {
     this.config = normalizeConfig(raw);
     this.configRead = true;
     const lifted = await this.checkRefusal();
+    if (changed || lifted) {
+      // Other credentials: a stop refused with the old ones is tried again.
+      this.resetStopTries();
+    }
     this.session = this.config.problem ? undefined : this.freshSession(this.config);
     this.seen.clear();
     this.published = undefined;
@@ -445,6 +449,18 @@ export class EconetApp {
   liftRefusal() {
     this.memory.refused = false;
     this.memory.fp = '';
+    this.resetStopTries();
+  }
+
+  /**
+   * The 401/403 a stop got are forgotten: they may have come from the
+   * credentials (other ones now, or the reads refused them too), never a
+   * refusal of that stop by the module.
+   */
+  resetStopTries() {
+    if (this.memory.stop && this.memory.stop.tries !== 0) {
+      this.memory.stop.tries = 0;
+    }
   }
 
   async setStatus(connected, message) {
@@ -651,6 +667,8 @@ export class EconetApp {
     if (isAuthRefused(err)) {
       this.memory.refused = true;
       this.memory.fp = refusalPrint(this.memory.salt, this.config);
+      // The reads refused too: the 401/403 of a stop came from the credentials.
+      this.resetStopTries();
       void this.saveMemory();
       this.logger.warn(
         `The ecoNET300 refused the user name or the password (HTTP ${err.status}): stopped, no automatic retry`,
@@ -859,7 +877,9 @@ export class EconetApp {
 
   status() {
     const [connected, message] = this.baseStatus();
-    return this.memoryBroken ? [connected, join(message, T.unreadable)] : [connected, message];
+    return this.memoryBroken
+      ? [connected, T.withNote(message, T.unreadable)]
+      : [connected, message];
   }
 
   baseStatus() {
@@ -868,7 +888,13 @@ export class EconetApp {
       return [false, T.problem(this.config.problem)];
     }
     if (this.memory.refused) {
-      return [false, T.refused];
+      const stop = this.memory.stop;
+      return [
+        false,
+        stop?.phase === 'unsent'
+          ? T.withNote(T.refused, STATUS_TEXTS.stopWaitsCredentials)
+          : T.refused,
+      ];
     }
     if (session.online === false) {
       const wait = age(session.wait ?? this.interval);
@@ -1389,7 +1415,10 @@ export class EconetApp {
     if (known && known !== key) {
       throw this.refusal(ERRORS.foreign);
     }
-    this.memory.stop = { key, phase: 'unsent', tries: 0, resends: 0, starts: 0 };
+    // The state read just before (if recent): burning off after it counts as
+    // the stop taken only when the boiler was running then.
+    const from = this.freshData()?.values?.mode ?? null;
+    this.memory.stop = { key, phase: 'unsent', tries: 0, resends: 0, starts: 0, from };
     // Never waited for: the stop does not depend on /data.
     void this.saveMemory();
     this.logger.info('ecoNET300: boiler off (stop from Gladys)');
@@ -1488,13 +1517,18 @@ export class EconetApp {
       return { error: ERRORS.rejected(err.result) };
     }
     if (isAuthRefused(err)) {
-      // Refused by the module for this write (never a refusal of the
-      // credentials, no print): counted, sent again twice at most.
-      if (current) {
+      // Never a refusal of the credentials here (no print, the reads go on).
+      // Counted against the stop only when the reads are accepted with the
+      // same credentials (a refusal of this write by the module); a refusal
+      // of the reads after it forgets the count (see block()).
+      const credentials = this.memory.refused || session.online !== true;
+      if (current && !credentials) {
         current.tries += 1;
       }
       await this.saveMemory();
-      return { error: ERRORS.stopUnsent(reason) };
+      return {
+        error: credentials ? ERRORS.stopAfterCredentials(reason) : ERRORS.stopUnsent(reason),
+      };
     }
     if (!err.sent) {
       // Never left: kept, sent again at each read until it leaves.
@@ -1566,8 +1600,12 @@ export class EconetApp {
           void this.saveMemory();
         }
       } else if (mode === MODE_BURNING_OFF) {
-        if (stop.phase === 'sent' || stop.starts !== 0) {
-          stop.phase = stop.phase === 'sent' ? 'stopping' : stop.phase;
+        // Burning off after running at the click: the stop taken (no resend
+        // from now on). Without a running state at the click, it proves
+        // nothing (a normal extinction): no change, and no resend either.
+        const proof = stop.phase === 'sent' && stop.from !== null && isRunning(stop.from);
+        if (proof || (stop.phase !== 'sent' && stop.starts !== 0)) {
+          stop.phase = proof ? 'stopping' : stop.phase;
           stop.starts = 0;
           void this.saveMemory();
         }

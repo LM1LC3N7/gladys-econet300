@@ -17,7 +17,8 @@
 //     "On" (with the option) or a start seen twice in a row after the stop
 //     was seen taken (see src/app.js): { key (the module), phase
 //     ('unsent', 'sent', 'stopping' = burning off seen, 'confirmed' = off
-//     seen), tries (refusals 401/403 by the module), resends, starts }.
+//     seen), tries (refusals 401/403 of the stop with credentials the reads
+//     accept), resends, starts, from (the state read at the click) }.
 // Never a secret in clear. Read back bounded (a clock moved or a file edited
 // by hand never gives a pause longer than its maximum; a date in the future
 // is invalid), only known keys of the expected shape (never an inherited or
@@ -112,10 +113,20 @@ function readStop(raw) {
     key,
     phase,
     // A count that cannot be read counts as spent: never more sends than allowed.
-    tries: count(own(raw, 'tries'), TIMINGS.stopResends),
+    // An unreadable count of refusals is none: a stop never left is never
+    // given up on a guess.
+    tries:
+      Number.isSafeInteger(own(raw, 'tries')) && own(raw, 'tries') >= 0
+        ? Math.min(own(raw, 'tries'), TIMINGS.stopResends)
+        : 0,
     resends: count(own(raw, 'resends'), TIMINGS.stopResends),
     // An unreadable count of starts is none (one read never lifts the guard).
     starts: Number.isSafeInteger(own(raw, 'starts')) && own(raw, 'starts') === 1 ? 1 : 0,
+    // The state read at the click (0 to 26), else unknown.
+    from:
+      Number.isSafeInteger(own(raw, 'from')) && own(raw, 'from') >= 0 && own(raw, 'from') <= 26
+        ? own(raw, 'from')
+        : null,
   };
 }
 
@@ -155,6 +166,7 @@ export const serializeMemory = ({ pausedUntil, salt, refused, fp, lastReadAt, st
         tries: stop.tries,
         resends: stop.resends,
         starts: stop.starts,
+        from: stop.from ?? null,
       }
     : null,
 });

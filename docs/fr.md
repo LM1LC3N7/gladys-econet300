@@ -107,16 +107,19 @@ suivante, sans limite, jusqu'à ce qu'il parte : il part donc à la première
 lecture qui joint le module (après une pause demandée par le module, ou de
 nouveaux identifiants s'ils ont été refusés, les lectures attendant alors), et dès le redémarrage de l'intégration ou un
 changement de configuration. Il n'est pas renvoyé à un autre ecoNET300 lu à
-l'adresse. Quand le module le refuse en HTTP 401/403, il est renvoyé 2 fois
-au plus, puis l'état le dit. Quand il part sans réponse, Gladys affiche
+l'adresse. Quand le module le refuse en HTTP 401/403 alors qu'il accepte les
+lectures, il est renvoyé 2 fois au plus, puis l'état le dit ; un refus dû aux
+identifiants (les lectures refusées aussi) ne compte pas, et d'autres
+identifiants remettent le compte à zéro. Quand il part sans réponse, Gladys affiche
 « arrêt envoyé, sans confirmation ». Quand le module répond autre chose que
 « OK », Gladys l'affiche et il n'est pas renvoyé.
 
 Il est annoncé réussi quand une lecture faite après lui montre la chaudière
-à l'arrêt, ou en extinction alors qu'elle fonctionnait juste avant. Une
+à l'arrêt, ou en extinction alors qu'elle fonctionnait au moment du clic. Une
 chaudière à granulés s'éteint en plusieurs minutes ; le sélecteur montre
 « Arrêt » pendant l'extinction. Dès qu'une lecture faite après l'arrêt la
-montre à l'arrêt ou en extinction, plus rien n'est renvoyé. Si une lecture
+montre à l'arrêt, ou en extinction alors qu'elle fonctionnait au clic, plus
+rien n'est renvoyé. Si une lecture
 faite après l'arrêt la montre en marche alors qu'elle n'a encore été vue ni
 à l'arrêt ni en extinction, l'arrêt est renvoyé, 3 fois au plus.
 

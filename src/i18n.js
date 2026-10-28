@@ -132,6 +132,10 @@ export const STATUS_TEXTS = {
     'Stop from Gladys not sent yet: sent again at each read',
     'Arrêt depuis Gladys pas encore envoyé : renvoyé à chaque lecture',
   ),
+  stopWaitsCredentials: both(
+    'A stop from Gladys waits: sent as soon as other credentials are saved or the button gets through',
+    'Un arrêt depuis Gladys attend : envoyé dès que d’autres identifiants sont enregistrés ou que le bouton passe',
+  ),
   stopRefused: both(
     'Stop from Gladys refused 3 times by the ecoNET300 (HTTP 401/403): not sent again',
     'Arrêt depuis Gladys refusé 3 fois par l’ecoNET300 (HTTP 401/403) : plus renvoyé',
@@ -178,7 +182,10 @@ export const T = {
   connected: (model) =>
     both(`Connected to ${model ?? 'the ecoNET300'}`, `Connecté à ${model ?? 'l’ecoNET300'}`),
   nextRead: (wait) => both(`Next read in ${wait.en}`, `Prochaine lecture dans ${wait.fr}`),
-  withNote: (text, note) => both(`${text.en}. ${note.en}.`, `${text.fr}. ${note.fr}.`),
+  withNote: (text, note) => {
+    const bare = (t) => t.replace(/\.$/, '');
+    return both(`${bare(text.en)}. ${bare(note.en)}.`, `${bare(text.fr)}. ${bare(note.fr)}.`);
+  },
   unreadable: both(
     '/data unreadable: nothing is saved, the start and the setpoints are refused.',
     '/data illisible : rien n’est enregistré, la marche et les consignes sont refusées.',
@@ -315,6 +322,11 @@ export const ERRORS = {
     both(
       `Stop not sent (${reason}): sent again at each read until it leaves.`,
       `Arrêt non envoyé (${reason}) : renvoyé à chaque lecture jusqu’à ce qu’il parte.`,
+    ),
+  stopAfterCredentials: (reason) =>
+    both(
+      `Stop not sent (${reason}, credentials refused): sent once other credentials are saved or the button gets through.`,
+      `Arrêt non envoyé (${reason}, identifiants refusés) : envoyé dès que d’autres identifiants sont enregistrés ou que le bouton passe.`,
     ),
   stopUnconfirmed: (reason) =>
     both(

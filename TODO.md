@@ -26,7 +26,16 @@ to date at the end of every milestone.
       click; m2 only running modes count for a start elsewhere, unreadable
       count = 0; m3 the SDK's configuration used when ours fails at the start;
       m4 burning off shows "Off"; m5 status punctuation.
-- [ ] **Review r2**.
+- [x] **Review 2 fixes** (2026-10-28, review r2 of fdacb0a): B1 a 401/403 of
+      the stop counts only while the reads are accepted with the same
+      credentials; a refusal of the reads, a lifted refusal or other
+      credentials reset the count; the ack and the status say a stop waits
+      for credentials; I6 tests (burning off seen by a follow-up read, bounds
+      of the same module and of a recent read only, a read using the whole
+      budget); m7 status punctuation; m8 this file; m9 tests of the minor
+      guards; m10 burning off is the stop taken only when the boiler was
+      running at the click (`from` kept with the stop).
+- [ ] **Review r3**.
 - [ ] **Milestone 2 — real module**: run against a real ecoNET300 (see
       "To check"); turn its answers (anonymized) into fixtures.
 
@@ -98,10 +107,18 @@ to date at the end of every milestone.
   900 ms sent, confirmed by the follow-up reads); success
   only when a read shows the value (equal to the value before = not applied
   yet); setpoint guards (90 s or until seen) make a new command always leave.
-- **Bounds**: those of `rmCurrentDataParamsEdits` read in the fresh read
-  (missing = refused); boiler 20–90 °C hard; hot water 20 °C to the ceiling
-  `max_dhw` (65 °C by default, 40–65, never above 65 °C, Louis's rule of
-  2026-10-28), high bound rounded down; whole degrees.
+- **Bounds**: those of `rmCurrentDataParamsEdits` from the last periodic read
+  of the same module when it is less than two intervals (+30 s) old, else
+  read in the fresh read (missing = refused); they are settings of the
+  controller, not states (review r2 accepted it; identity and age tested).
+  Boiler 20–90 °C hard; hot water 20 °C to the ceiling `max_dhw` (65 °C by
+  default, 40–65, never above 65 °C, Louis's rule of 2026-10-28), high bound
+  rounded down; whole degrees; all checked again in `beforeSend`.
+- **Ack budget, a chosen gap from the ~3.5 s of the rules**: sent by 4 s,
+  answer and confirming read by 4.5 s (Gladys cuts at 5 s), so that a scene
+  of three commands on a module at 700 ms per request is sent and confirmed
+  (review r1 I2). To bring back to ~3.5 s if Gladys acks arrive late on a
+  real installation.
 - **Refused credentials**: 401/403 of a read (never of the secondary
   bounds); stop persisted with 8 bits of a salted scrypt print of address,
   user and password (tells "other credentials" at a restart, cannot test a
@@ -123,10 +140,14 @@ to date at the end of every milestone.
 - **One module, one pause**: the features share the module; a 429/5xx on
   one write pauses the module, so the commands of the same batch after it
   are refused "paused" (not sent).
-- **Mutation checks** (2026-10-28, copies in a temporary folder of the
-  agent): 35 mutants of the guards (option, epoch, stop guard, bounds,
-  ceiling, preemption, retries, resends, start-elsewhere count, /data,
-  pause, refusal, freshness, period, getConfig retries), all killed.
+- **Mutation checks**: 35 mutants of milestone 1 (all killed), then the 39
+  and 59 mutants of reviews r1 and r2 replayed in a temporary folder of the
+  agent. Equivalent survivors, kept as they are: the /data check of
+  `turnOn` (also in `check()`, called just before), the pair
+  `startedAt > stopSentAt` / `writes !== writes` (each covers the other for
+  the stop), `before !== undefined` in the stop's ack (`isRunning(undefined)`
+  is false). Near equivalent: the resend on a new session in `sendStop` (the
+  first read of the new session sends it too).
 
 ## Next
 

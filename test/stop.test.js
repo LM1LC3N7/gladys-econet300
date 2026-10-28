@@ -33,6 +33,7 @@ test('Off with the option off: sent at once, success once read off, kept in /dat
     tries: 0,
     resends: 0,
     starts: 0,
+    from: 3,
   });
   await t.wait(6 * SECOND);
   assert.equal(last(t.gladys, 'boiler-control'), 'off');
@@ -512,4 +513,106 @@ test('"Off" while other credentials are saved: never lost, sent on the new sessi
   await t.wait(2 * SECOND);
   assert.ok(stops(t) >= 1);
   assert.notEqual(t.app.memory.stop.phase, 'unsent');
+});
+
+test('a stop refused 401 because the password changed is never given up: sent with the new one', async () => {
+  const store = memoryStore();
+  const t = await setup({ store });
+  await t.connect();
+  t.dev.password = 'changed-on-the-module';
+  const ack = await t.command('boiler-control', 'off');
+  assert.match(ack.error, /Arrêt non envoyé \(HTTP 401\)/);
+  // The next read is refused too: the 401 was the credentials.
+  await t.wait(61 * SECOND);
+  assert.equal(store.data.refused, true);
+  assert.equal(store.data.stop.tries, 0, 'forgotten');
+  assert.match(statusText(t), /Un arrêt depuis Gladys attend/);
+  // The button, twice, while refused: never counted.
+  for (let i = 0; i < 2; i += 1) {
+    await t.wait(61 * SECOND);
+    const again = await t.during(t.gladys.fake.action('test_connection', {}));
+    assert.ok(again.ok);
+  }
+  assert.equal(store.data.stop.tries, 0);
+  assert.equal(store.data.stop.phase, 'unsent');
+  // The right password saved: the stop leaves at once.
+  await t.during(t.gladys.fake.configUpdated({ ...CONFIG, password: 'changed-on-the-module' }));
+  await t.wait(SECOND);
+  const sent = t.dev.requests.filter(isStop);
+  assert.ok(sent.length >= 1);
+  assert.ok(['sent', 'confirmed'].includes(store.data.stop.phase));
+});
+
+test('a click while the credentials are refused: acked "sent once other credentials", never counted', async () => {
+  const store = memoryStore();
+  const t = await setup({ store, config: { ...CONFIG, password: 'wrong' } });
+  await t.connect();
+  const ack = await t.command('boiler-control', 'off');
+  assert.match(ack.error, /identifiants refusés\) : envoyé dès que d’autres identifiants/);
+  assert.equal(store.data.stop.tries, 0);
+});
+
+test('burning off seen by a follow-up read (not the ack): the stop is taken, a panel start not contradicted', async () => {
+  const store = memoryStore();
+  const t = await setup({ store });
+  await t.connect();
+  await t.create();
+  t.dev.ignoreControl = true;
+  t.dev.route = (path) => {
+    if (path === '/econet/newParam') {
+      t.clock.timers.setTimeout(() => {
+        t.dev.curr.mode = 7;
+      }, 2 * SECOND);
+    }
+    return undefined;
+  };
+  const ack = await t.command('boiler-control', 'off');
+  assert.equal(ack.success, false, 'still running at the ack');
+  t.dev.route = undefined;
+  await t.wait(6 * SECOND);
+  assert.equal(store.data.stop.phase, 'stopping');
+  t.dev.curr.mode = 2;
+  await t.wait(30 * SECOND);
+  assert.equal(stops(t), 1, 'no resend after burning off was seen');
+  // Started again: two reads running lift the guard (burning off counts as taken).
+  await t.wait(2 * MINUTE);
+  assert.equal(store.data.stop, null);
+});
+
+test('burning off when the boiler was already burning off at the click proves nothing', async () => {
+  const store = memoryStore();
+  const t = await setup({ store });
+  await t.connect();
+  t.dev.ignoreControl = true;
+  t.dev.curr.mode = 7;
+  await t.wait(61 * SECOND);
+  await t.command('boiler-control', 'off');
+  await t.wait(25 * SECOND);
+  assert.equal(store.data.stop.phase, 'sent', 'not taken');
+  assert.equal(store.data.stop.from, 7);
+  t.dev.curr.mode = 3;
+  await t.wait(61 * SECOND);
+  assert.ok(stops(t) >= 2 && stops(t) <= 4, `running after: sent again (${stops(t)})`);
+});
+
+test('an alarm after a stop not taken is no contradiction: not sent again', async () => {
+  const t = await setup();
+  await t.connect();
+  t.dev.ignoreControl = true;
+  await t.command('boiler-control', 'off');
+  t.dev.curr.mode = 8;
+  await t.wait(5 * MINUTE);
+  assert.equal(stops(t), 1);
+});
+
+test('a stop being sent is never doubled by a read', async () => {
+  const t = await setup();
+  await t.connect();
+  t.app.memory.stop = { key: KEY, phase: 'unsent', tries: 0, resends: 0, starts: 0, from: null };
+  assert.equal(t.app.stopToResend(t.app.session), true);
+  t.app.stopping = 1;
+  assert.equal(t.app.stopToResend(t.app.session), false);
+  t.app.stopping = 0;
+  t.app.memory.stop.tries = 3;
+  assert.equal(t.app.stopToResend(t.app.session), false);
 });

@@ -30,8 +30,8 @@ test('read back bounded: pause capped, future dates invalid, unknown keys droppe
   ).stop;
   assert.deepEqual(
     stop,
-    { key: '0123456789abcdef', phase: 'unsent', tries: 3, resends: 3, starts: 0 },
-    'unreadable counts of sends are spent; of starts, none',
+    { key: '0123456789abcdef', phase: 'unsent', tries: 0, resends: 3, starts: 0, from: null },
+    'unreadable resends are spent; refusals and starts unreadable are none',
   );
   assert.equal(normalizeMemory(JSON.parse('{"__proto__":{"refused":true}}'), NOW).refused, false);
   assert.deepEqual(Object.keys(serializeMemory(m)).sort(), [

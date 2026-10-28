@@ -32,7 +32,7 @@ User guides: [English](docs/en.md), [français](docs/fr.md).
   and leaves first, cancels the commands not sent yet, goes through a pause
   or a refused password (one try); kept in `/data` and sent again by the
   reads until it leaves (no limit when it could not connect; 3 times at most
-  when refused 401/403, or when the boiler still runs before it was seen off
+  when refused 401/403 while the reads go through, or when the boiler still runs before it was seen off
   or burning off). Its guard is lifted only by "On" or by a running state
   read twice after the stop was seen taken. Its two
   refusal cases are listed in the guides.

@@ -346,3 +346,38 @@ test('a setpoint alone on a module answering in 900 ms: set and confirmed', asyn
   t.dev.latency = 900;
   assert.deepEqual(await t.command('dhw-setpoint', 50), { success: true });
 });
+
+test('bounds of the last read are those of the same module only', async () => {
+  const t = await setup({ config: ALLOW });
+  await t.connect();
+  // Another module answers now, with lower bounds; no periodic read since.
+  t.dev.uid = 'UID-TEST-OTHER-0002';
+  t.dev.edits[1281].max = 50;
+  const { identityKey } = await import('../src/model.js');
+  const other = `ext:econet300-test:econet300:${identityKey('UID-TEST-OTHER-0002')}`;
+  const outcome = await t.during(
+    t.gladys.fake.setValue({ external_id: other }, { external_id: `${other}:dhw-setpoint` }, 55),
+  );
+  assert.match(outcome.value.error, /de 20 à 50 °C/);
+  assert.equal(setpoints(t).length, 0);
+});
+
+test('bounds of a read older than two intervals are read again', async () => {
+  const t = await setup({ config: ALLOW });
+  await t.connect();
+  t.dev.edits[1281].max = 50;
+  t.app.session.data.at -= 10 * MINUTE;
+  const ack = await t.command('dhw-setpoint', 55);
+  assert.match(ack.error, /de 20 à 50 °C/);
+  assert.equal(setpoints(t).length, 0);
+});
+
+test('a setpoint on a slow module (700 ms) without recent bounds: the read uses the whole budget', async () => {
+  const t = await setup({ config: ALLOW });
+  await t.connect();
+  t.app.session.data.at -= 10 * MINUTE;
+  t.dev.latency = 700;
+  const ack = await t.command('dhw-setpoint', 50);
+  assert.equal(setpoints(t).length, 1, 'three reads of 700 ms, then the write');
+  assert.ok(ack.success || /pas encore appliquée|sans confirmation/.test(ack.error), ack.error);
+});

@@ -101,15 +101,18 @@ without limit, until it leaves: it goes at the first read that reaches the
 module (after a pause asked by the module, or new credentials when they were
 refused, as the reads wait then), and as soon as the integration restarts or the configuration
 changes. It is never sent again to another ecoNET300 read at the address.
-When the module refuses it with HTTP 401/403, it is sent again twice at
-most, then the status says so. When it leaves without an answer, Gladys
+When the module refuses it with HTTP 401/403 while it accepts the reads, it
+is sent again twice at most, then the status says so; a refusal due to the
+credentials (the reads refused too) does not count, and other credentials
+reset the count. When it leaves without an answer, Gladys
 shows "stop sent, without confirmation". When the module answers something
 other than "OK", Gladys shows it and it is not sent again.
 
 It is reported successful when a read made after it shows the boiler off,
-or burning off while it was running just before. A pellet boiler takes
+or burning off while it was running at the click. A pellet boiler takes
 several minutes to go out; the select shows "Off" while it burns off. Once a
-read made after the stop shows it off or burning off, nothing is sent again.
+read made after the stop shows it off, or burning off while it was running at
+the click, nothing is sent again.
 If a read made after the stop shows it running while it has been seen
 neither off nor burning off yet, the stop is sent again, 3 times at most.
 
