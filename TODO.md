@@ -176,3 +176,9 @@ to date at the end of every milestone.
 - Mixing circuit setpoints when the module gives their bounds.
 - Controllers without `regParams` values (ecoMAX360i, ecoSOL, some ecoMAX860
   and 920): read `rmCurrentDataParams`/`rmParamsData` like the reference.
+
+## Next patch
+
+- r4 m13: at 700 ms per request a scene of 3 commands is confirmed with only 35 ms to spare (4.265 s for a
+  4.3 s deadline); on a real module it will often end as "sent, without confirmation". Say "about 700 ms" in
+  the docs.
